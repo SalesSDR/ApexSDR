@@ -1,0 +1,57 @@
+"use client";
+
+import { Header } from "@/components/layout/Header";
+import { ProspectTable } from "@/features/active-queue/ProspectTable";
+import { useGetProspects } from "@/hooks/useGetProspects";
+import { useProspectStream } from "@/hooks/useProspectStream";
+
+export default function ActiveQueuePage() {
+  const { data: prospects, loading, error, refetch } = useGetProspects();
+
+  useProspectStream((event) => {
+    console.log("Received SSE event, refetching prospects:", event);
+    refetch();
+  });
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      <Header
+        showViewSwitcher
+        showAddProspect
+        showUploadDownload
+        showResearchButton={false}
+        totalCount="1,250"
+        totalCountLabel="Active prospects"
+      />
+
+      <div
+        className="flex flex-col flex-1 min-h-0 overflow-hidden"
+        style={{ background: "var(--apex-bg)" }}
+      >
+        <div
+          className="flex-shrink-0 px-5 py-3"
+          style={{ background: "var(--apex-surface)", borderBottom: "1px solid var(--apex-border)" }}
+        >
+          <h2 className="text-sm font-semibold" style={{ color: "var(--apex-text)" }}>
+            Active Prospects Queue:{" "}
+            <span style={{ color: "var(--apex-accent)" }}>
+              B2B Marketing VPs (Silicon Valley)
+            </span>
+          </h2>
+        </div>
+
+        <div
+          className="flex-1 min-h-0 overflow-hidden rounded-none"
+          style={{ background: "var(--apex-surface)" }}
+        >
+          <ProspectTable
+            prospects={prospects}
+            loading={loading}
+            error={error}
+            totalCount={1250}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}

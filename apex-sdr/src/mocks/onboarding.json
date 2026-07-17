@@ -1,0 +1,37 @@
+{
+  "progress": 40,
+  "currentStep": "Define ICP",
+  "label": "Apex Onboarding",
+  "steps": [
+    {
+      "id": "step-1",
+      "label": "Connect CRM",
+      "completed": true,
+      "description": "Connect your CRM to sync existing contacts"
+    },
+    {
+      "id": "step-2",
+      "label": "Define ICP",
+      "completed": true,
+      "description": "Define your Ideal Customer Profile with AI assistance"
+    },
+    {
+      "id": "step-3",
+      "label": "Import Prospects",
+      "completed": false,
+      "description": "Import prospects from LinkedIn or CSV"
+    },
+    {
+      "id": "step-4",
+      "label": "Set Up Sequences",
+      "completed": false,
+      "description": "Create outreach sequences for your campaigns"
+    },
+    {
+      "id": "step-5",
+      "label": "Launch Campaign",
+      "completed": false,
+      "description": "Activate your first AI-powered campaign"
+    }
+  ]
+}

@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: apex_sdr_postgres
+    environment:
+      POSTGRES_USER: sdr_admin
+      POSTGRES_PASSWORD: SECURE_VAULT_PW
+      POSTGRES_DB: apex_sdr_prod
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sdr_admin -d apex_sdr_prod"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: apex_sdr_redis
+    command: redis-server --requirepass STRONG_AUTH_TOKEN
+    ports:
+      - "6380:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "STRONG_AUTH_TOKEN", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api_gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: apex_sdr_api_gateway
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4 --reload
+    env_file:
+      - .env.production
+    environment:
+      - DATABASE_ASYNC_URL=postgresql+asyncpg://sdr_admin:SECURE_VAULT_PW@postgres:5432/apex_sdr_prod
+      - REDIS_URL=redis://:STRONG_AUTH_TOKEN@redis:6379/0
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src/app:/app/src/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: always
+
+  arq_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: apex_sdr_arq_worker
+    command: arq app.workers.main.WorkerSettings
+    env_file:
+      - .env.production
+    environment:
+      - DATABASE_ASYNC_URL=postgresql+asyncpg://sdr_admin:SECURE_VAULT_PW@postgres:5432/apex_sdr_prod
+      - REDIS_URL=redis://:STRONG_AUTH_TOKEN@redis:6379/0
+    volumes:
+      - ./src/app:/app/src/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: always
+
+volumes:
+  pgdata:
+  redisdata:

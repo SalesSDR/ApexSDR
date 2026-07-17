@@ -1,0 +1,92 @@
+{
+  "locations": [
+    { "label": "Silicon Valley", "value": "silicon-valley", "removable": true },
+    { "label": "SF Bay Area", "value": "sf-bay-area", "removable": true },
+    { "label": "California", "value": "california", "removable": true },
+    { "label": "US", "value": "us", "removable": true }
+  ],
+  "jobTitles": [
+    { "label": "VP Marketing", "value": "vp-marketing", "removable": true },
+    { "label": "Director of Marketing", "value": "director-marketing", "removable": true },
+    { "label": "Head of Marketing", "value": "head-marketing", "removable": true }
+  ],
+  "industry": [
+    { "label": "B2B Tech", "value": "b2b-tech", "removable": true },
+    { "label": "SaaS", "value": "saas", "removable": true },
+    { "label": "Software", "value": "software", "removable": true }
+  ],
+  "companySize": [
+    { "label": "500-1000", "value": "500-1000", "removable": true },
+    { "label": "1000-5000", "value": "1000-5000", "removable": true }
+  ],
+  "revenue": [
+    { "label": ">$50M", "value": "gt-50m", "removable": true }
+  ],
+  "technology": [
+    { "label": "HubSpot", "value": "hubspot", "removable": true },
+    { "label": "Salesforce", "value": "salesforce", "removable": true },
+    { "label": "Marketo", "value": "marketo", "removable": true }
+  ],
+  "keywords": [
+    { "label": "Growth", "value": "growth", "removable": true },
+    { "label": "Demand Gen", "value": "demand-gen", "removable": true }
+  ],
+  "totalLeads": 60902,
+  "sidebarCategories": [
+    {
+      "id": "job-titles",
+      "label": "Job Titles",
+      "expanded": true,
+      "items": [
+        { "label": "VP of Marketing", "count": "1.8K", "selected": true },
+        { "label": "Director of Marketing", "count": "2M", "selected": false },
+        { "label": "Content Marketing", "count": "1.5M", "selected": false },
+        { "label": "VP of Sales", "count": "1.3M", "selected": false }
+      ]
+    },
+    {
+      "id": "people-lookalikes",
+      "label": "People Lookalikes",
+      "expanded": false,
+      "items": []
+    },
+    {
+      "id": "company",
+      "label": "Company",
+      "expanded": false,
+      "items": []
+    },
+    {
+      "id": "location",
+      "label": "Location",
+      "expanded": false,
+      "items": []
+    },
+    {
+      "id": "industry-keywords",
+      "label": "Industry & Keywords",
+      "expanded": false,
+      "items": []
+    },
+    {
+      "id": "technology-stack",
+      "label": "Technology Stack",
+      "expanded": false,
+      "items": []
+    }
+  ],
+  "conversationHistory": [
+    {
+      "id": "msg1",
+      "role": "user",
+      "content": "Show me VPs of Marketing at B2B tech companies in the US with 500+ employees, based in Silicon Valley, that use HubSpot.",
+      "timestamp": "2026-07-15T09:00:00Z"
+    },
+    {
+      "id": "msg2",
+      "role": "assistant",
+      "content": "Apex SDR: Understood! Working with VP Marketing at B2B Tech with 500+ employees, in Silicon Valley, using HubSpot. Refining and populating filters...",
+      "timestamp": "2026-07-15T09:00:02Z"
+    }
+  ]
+}
