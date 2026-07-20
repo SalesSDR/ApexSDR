@@ -15,7 +15,7 @@ export default function DefineICPPage() {
 
   const handleSendMessage = async (msg: string) => {
     // Optimistically add user message
-    const newUserMsg = { id: Date.now().toString(), role: "user" as const, content: msg };
+    const newUserMsg = { id: Date.now().toString(), role: "user" as const, content: msg, timestamp: new Date().toISOString() };
     setConversation((prev) => [...prev, newUserMsg]);
     
     try {
@@ -31,7 +31,8 @@ export default function DefineICPPage() {
         const aiResponse = { 
           id: (Date.now() + 1).toString(), 
           role: "assistant" as const, 
-          content: `I've analyzed your request and successfully mapped the parameters into structured filters.` 
+          content: `I've analyzed your request and successfully mapped the parameters into structured filters.`,
+          timestamp: new Date().toISOString()
         };
         setConversation((prev) => [...prev, aiResponse]);
         
@@ -55,7 +56,8 @@ export default function DefineICPPage() {
       const errorMsg = { 
         id: (Date.now() + 1).toString(), 
         role: "assistant" as const, 
-        content: `I'm sorry, I encountered an error while trying to process that request.` 
+        content: `I'm sorry, I encountered an error while trying to process that request.`,
+        timestamp: new Date().toISOString()
       };
       setConversation((prev) => [...prev, errorMsg]);
     }

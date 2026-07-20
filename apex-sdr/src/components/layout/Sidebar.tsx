@@ -183,20 +183,7 @@ export function Sidebar() {
       >
         {/* Triangle logo icon */}
         <div className="flex-shrink-0 w-8 h-8 flex items-center justify-center">
-          <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-            <polygon
-              points="14,3 26,24 2,24"
-              fill="none"
-              stroke="#f59e0b"
-              strokeWidth="2"
-              strokeLinejoin="round"
-            />
-            <polygon
-              points="14,9 21,22 7,22"
-              fill="#f59e0b"
-              opacity="0.3"
-            />
-          </svg>
+          <img src="/logo.jpg" alt="Apex Logo" className="w-full h-full object-cover rounded shadow-sm" />
         </div>
 
         <AnimatePresence>
@@ -464,16 +451,7 @@ export function Sidebar() {
 
         {/* Apex Logo */}
         <div className="flex items-center justify-center gap-2">
-          <svg width="20" height="20" viewBox="0 0 28 28" fill="none">
-            <polygon
-              points="14,3 26,24 2,24"
-              fill="none"
-              stroke="#f59e0b"
-              strokeWidth="2"
-              strokeLinejoin="round"
-            />
-            <polygon points="14,9 21,22 7,22" fill="#f59e0b" opacity="0.4" />
-          </svg>
+          <img src="/logo.jpg" alt="Apex Logo" className="w-5 h-5 object-cover rounded shadow-sm" />
           <AnimatePresence>
             {expanded && (
               <motion.span
