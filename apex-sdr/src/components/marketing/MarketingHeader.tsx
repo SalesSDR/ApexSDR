@@ -10,8 +10,8 @@ export function MarketingHeader() {
 
   const navLinks = [
     { name: "Products", href: "/products/apex-sdr" },
-    { name: "Platform", href: "#" },
-    { name: "Solutions", href: "#" },
+    { name: "Platform", href: "/platform" },
+    { name: "Solutions", href: "/solutions" },
     { name: "Customers", href: "#" },
     { name: "Company", href: "#" },
   ];
@@ -50,10 +50,10 @@ export function MarketingHeader() {
           {/* CTA & Mobile Toggle */}
           <div className="flex items-center gap-4">
             <Link
-              href="/prospect/active-queue"
+              href="/demo"
               className="hidden md:flex items-center justify-center rounded-full bg-white text-black px-5 py-2 text-sm font-semibold hover:bg-gray-200 transition-colors"
             >
-              Launch App
+              Get a Live Demo
             </Link>
             <button
               className="md:hidden text-white p-2"
@@ -94,11 +94,11 @@ export function MarketingHeader() {
               ))}
               <div className="mt-8 pt-8 border-t border-white/10 flex flex-col gap-4">
                 <Link
-                  href="/prospect/active-queue"
+                  href="/demo"
                   onClick={() => setMobileMenuOpen(false)}
                   className="flex items-center justify-center rounded-full bg-white text-black px-6 py-4 text-lg font-semibold hover:bg-gray-200 transition-colors"
                 >
-                  Launch App
+                  Get a Live Demo
                 </Link>
               </div>
             </nav>
