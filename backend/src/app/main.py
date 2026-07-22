@@ -5,7 +5,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.prospects import router as prospects_router
 from app.api.v1.campaigns import router as campaigns_router
 from app.api.v1.webhooks import router as webhooks_router
+from app.api.v1.n8n_webhooks import router as n8n_router
 from app.api.v1.icp import router as icp_router
+from app.api.v1.sequences import router as sequences_router
 from app.database import engine
 from app.models.base import Base
 
@@ -21,7 +23,7 @@ app = FastAPI(
 # Enable CORS for standard frontend calls
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -49,3 +51,5 @@ app.include_router(prospects_router, prefix="/api/v1")
 app.include_router(campaigns_router, prefix="/api/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
 app.include_router(icp_router, prefix="/api/v1")
+app.include_router(sequences_router, prefix="/api/v1")
+app.include_router(n8n_router, prefix="/api/v1/webhooks")

@@ -90,5 +90,34 @@ class ActivityTimeline(Base, TenantMixin):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=func.now(), nullable=False)
     
-    # Relationships
     prospect = relationship("Prospect", back_populates="activity_timeline")
+
+class SequenceRule(Base, TenantMixin):
+    __tablename__ = "sequence_rules"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    campaign_id: Mapped[Optional[str]] = mapped_column(ForeignKey("campaigns.id"), nullable=True)
+    
+    # Limits & Intervals
+    max_linkedin_msgs: Mapped[int] = mapped_column(Integer, default=3)
+    linkedin_interval_days: Mapped[int] = mapped_column(Integer, default=2)
+    max_emails: Mapped[int] = mapped_column(Integer, default=4)
+    email_interval_days: Mapped[int] = mapped_column(Integer, default=3)
+    max_calls: Mapped[int] = mapped_column(Integer, default=2)
+    call_interval_days: Mapped[int] = mapped_column(Integer, default=4)
+    
+    # Rules Panel Configs
+    response_handling_action: Mapped[str] = mapped_column(String(50), default="PAUSE_AND_NOTIFY") # PAUSE_AND_NOTIFY, CONTINUE
+    ai_guided_calls: Mapped[bool] = mapped_column(Boolean, default=True)
+    call_mode: Mapped[str] = mapped_column(String(20), default="MANUAL") # MANUAL, AUTOMATIC
+    assigned_lead_owner_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    auto_handover_to_admin: Mapped[bool] = mapped_column(Boolean, default=True)
+
+class SequenceStep(Base):
+    __tablename__ = "sequence_steps"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    sequence_rule_id: Mapped[str] = mapped_column(ForeignKey("sequence_rules.id", ondelete="CASCADE"))
+    channel: Mapped[str] = mapped_column(String(20)) # LINKEDIN, EMAIL, CALL
+    step_number: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(100)) # e.g. "Message 1 (AI-crafted connect)"
+    delay_days: Mapped[int] = mapped_column(Integer, default=2)
+    template_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

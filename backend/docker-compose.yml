@@ -79,6 +79,39 @@ services:
         condition: service_healthy
     restart: always
 
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: apex_n8n
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678/
+    volumes:
+      - n8n_data:/home/node/.n8n
+    restart: always
+
+  admin_dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: apex_streamlit
+    command: streamlit run src/admin_app.py --server.port=8501 --server.address=0.0.0.0
+    ports:
+      - "8501:8501"
+    environment:
+      - DATABASE_ASYNC_URL=postgresql+asyncpg://sdr_admin:SECURE_VAULT_PW@postgres:5432/apex_sdr_prod
+      - REDIS_URL=redis://:STRONG_AUTH_TOKEN@redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: always
+
 volumes:
   pgdata:
   redisdata:
+  n8n_data:

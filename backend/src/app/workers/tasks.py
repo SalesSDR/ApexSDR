@@ -11,7 +11,7 @@ from redis.asyncio import Redis
 
 from app.config import settings
 from app.core.state_machine import StateMachine
-from app.models.schemas import Prospect, WorkflowState, FollowUp, WorkspaceSetting, ActivityTimeline
+from app.models.schemas import Prospect, WorkflowState, FollowUp, WorkspaceSetting, ActivityTimeline, SequenceRule
 from app.services.ai import generate_outreach_message
 logger = logging.getLogger(__name__)
 
@@ -329,13 +329,20 @@ async def execute_follow_up_task(ctx, prospect_id: str, sequence_number: int, te
             payload_updates={f"follow_up_{sequence_number}_email_id": email_res.get("email_id")}
         )
 
-        # Fetch sequence timing limits
+        # Fetch sequence rules for timing limits
+        rule_res = await db.execute(select(SequenceRule).where(SequenceRule.tenant_id == tenant_id))
+        rule_obj = rule_res.scalar_one_or_none()
+        
+        # If no rule exists, fallback to default WorkspaceSetting
         sett_res = await db.execute(select(WorkspaceSetting).where(WorkspaceSetting.tenant_id == tenant_id))
         settings_obj = sett_res.scalar_one_or_none() or WorkspaceSetting(tenant_id=tenant_id)
+        
+        max_follow_ups = rule_obj.max_emails if rule_obj else settings_obj.max_follow_ups
+        email_interval_days = rule_obj.email_interval_days if rule_obj else (settings_obj.follow_up_delay_hours // 24)
 
         # Decide whether to queue a next follow up, or escalate to Twilio Voice
         next_seq = sequence_number + 1
-        if next_seq <= settings_obj.max_follow_ups:
+        if next_seq <= max_follow_ups:
             # Transition back to waiting state
             await StateMachine.transition(
                 db=db,
@@ -347,7 +354,7 @@ async def execute_follow_up_task(ctx, prospect_id: str, sequence_number: int, te
 
             next_time = StateMachine.calculate_next_execution(
                 datetime.utcnow(),
-                settings_obj.follow_up_delay_hours,
+                email_interval_days * 24, # Convert days to hours
                 settings_obj
             )
 
@@ -379,9 +386,11 @@ async def execute_follow_up_task(ctx, prospect_id: str, sequence_number: int, te
                 event_trigger="Cron Check (Still zero response)"
             )
 
+            call_interval_days = rule_obj.call_interval_days if rule_obj else (settings_obj.call_delay_hours // 24)
+
             next_time = StateMachine.calculate_next_execution(
                 datetime.utcnow(),
-                settings_obj.call_delay_hours,
+                call_interval_days * 24, # Convert days to hours
                 settings_obj
             )
 
@@ -431,20 +440,46 @@ async def execute_call_task(ctx, prospect_id: str, tenant_id: str):
             await db.commit()
             return
 
-        # Trigger dial job via Twilio Voice API
-        call_res = await twilio.initiate_call(
-            to_number=prospect.phone_number,
-            twimlet_url="http://twimlets.com/holdmusic?Bucket=com.twilio.music.classical"
-        )
+        # Check sequence rules for call mode
+        rule_res = await db.execute(select(SequenceRule).where(SequenceRule.tenant_id == tenant_id))
+        rule = rule_res.scalar_one_or_none()
+        call_mode = rule.call_mode if rule else "MANUAL"
+        assigned_owner = rule.assigned_lead_owner_id if rule else "Admin"
+        
+        if call_mode == "AUTOMATIC":
+            # Trigger dial job via Twilio Voice API
+            call_res = await twilio.initiate_call(
+                to_number=prospect.phone_number,
+                twimlet_url="http://twimlets.com/holdmusic?Bucket=com.twilio.music.classical"
+            )
 
-        await StateMachine.transition(
-            db=db,
-            redis=redis,
-            prospect_id=prospect_id,
-            new_state="CALL_COMPLETED",
-            event_trigger="Telephony Router Fire",
-            payload_updates={"twilio_call_sid": call_res.get("sid")}
-        )
+            await StateMachine.transition(
+                db=db,
+                redis=redis,
+                prospect_id=prospect_id,
+                new_state="CALL_COMPLETED",
+                event_trigger="Telephony Router Fire",
+                payload_updates={"twilio_call_sid": call_res.get("sid")}
+            )
+        else:
+            # MANUAL mode: Create ActivityTimeline task for SDR
+            activity = ActivityTimeline(
+                prospect_id=prospect.id,
+                tenant_id=tenant_id,
+                channel="CALL",
+                event_type="MANUAL_TASK_CREATED",
+                description=f"Manual call task assigned to {assigned_owner}. Number: {prospect.phone_number}"
+            )
+            db.add(activity)
+            
+            await StateMachine.transition(
+                db=db,
+                redis=redis,
+                prospect_id=prospect_id,
+                new_state="CALL_SCHEDULED",
+                event_trigger="Manual Call Router Fire",
+                payload_updates={"assigned_owner": assigned_owner}
+            )
 
         await db.commit()
 
