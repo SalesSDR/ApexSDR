@@ -9,7 +9,7 @@ services:
     env: docker
     rootDir: backend
     dockerfilePath: Dockerfile.prod
-    startCommand: "gunicorn app.main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT"
+    dockerCommand: "gunicorn app.main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT"
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -28,7 +28,7 @@ services:
     env: docker
     rootDir: backend
     dockerfilePath: Dockerfile.prod
-    startCommand: "arq app.workers.tasks.WorkerSettings"
+    dockerCommand: "arq app.workers.tasks.WorkerSettings"
     envVars:
       - key: DATABASE_URL
         fromDatabase:
