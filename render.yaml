@@ -1,4 +1,9 @@
 services:
+  - type: redis
+    name: apex-sdr-redis
+    plan: free # defaults to starter but you can use free for redis
+    ipAllowList: []
+
   - type: web
     name: apex-sdr-api
     env: docker
@@ -39,6 +44,3 @@ databases:
   - name: apex-sdr-db
     databaseName: apexsdr
     user: apexsdr
-
-  - type: redis
-    name: apex-sdr-redis
