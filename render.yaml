@@ -10,7 +10,7 @@ services:
     env: docker
     rootDir: backend
     dockerfilePath: Dockerfile.prod
-    dockerCommand: "sh -c \"arq app.workers.tasks.WorkerSettings & gunicorn app.main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT\""
+    dockerCommand: "arq app.workers.tasks.WorkerSettings & gunicorn app.main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT"
     envVars:
       - key: DATABASE_URL
         sync: false
