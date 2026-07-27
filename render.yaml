@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: apex-sdr-api
+    env: docker
+    rootDir: backend
+    dockerfilePath: Dockerfile.prod
+    startCommand: "gunicorn app.main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: apex-sdr-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: apex-sdr-redis
+          property: connectionString
+      - key: ALLOWED_ORIGINS
+        value: "*" # You can update this to your Vercel URL later
+
+  - type: worker
+    name: apex-sdr-worker
+    env: docker
+    rootDir: backend
+    dockerfilePath: Dockerfile.prod
+    startCommand: "arq app.workers.tasks.WorkerSettings"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: apex-sdr-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: apex-sdr-redis
+          property: connectionString
+
+databases:
+  - name: apex-sdr-db
+    databaseName: apexsdr
+    user: apexsdr
+
+  - type: redis
+    name: apex-sdr-redis
