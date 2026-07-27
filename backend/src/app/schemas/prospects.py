@@ -44,3 +44,16 @@ class BulkActionSchema(BaseModel):
 
 class AdvanceActionSchema(BaseModel):
     target_state: Optional[str] = None
+
+class UnipileProfileSchema(BaseModel):
+    provider_id: str
+    first_name: str
+    last_name: str
+    title: Optional[str] = None
+    organization_name: Optional[str] = None
+    email: Optional[str] = None
+    linkedin_url: Optional[str] = None
+
+class UnipileImportSchema(BaseModel):
+    profiles: list[UnipileProfileSchema]
+    campaign_id: Optional[str] = None

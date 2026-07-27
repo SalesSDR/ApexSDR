@@ -110,6 +110,20 @@ services:
       redis:
         condition: service_healthy
     restart: always
+  streamlit_ui:
+    build:
+      context: ../streamlit_app
+      dockerfile: Dockerfile
+    container_name: apex_streamlit_ui
+    ports:
+      - "8502:8502"
+    environment:
+      - BACKEND_URL=http://api_gateway:8000/api/v1
+    depends_on:
+      api_gateway:
+        condition: service_started
+    restart: always
+
 
 volumes:
   pgdata:

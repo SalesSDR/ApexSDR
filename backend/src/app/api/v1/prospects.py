@@ -15,8 +15,9 @@ from app.config import settings
 from app.database import get_db, get_redis
 from app.api.v1.auth import verify_tenant
 from app.models.schemas import Prospect, WorkflowState, ActivityTimeline
-from app.schemas.prospects import ProspectCreateSchema, ProspectResponseSchema, ProspectListResponseSchema, BulkActionSchema, AdvanceActionSchema
+from app.schemas.prospects import ProspectCreateSchema, ProspectResponseSchema, ProspectListResponseSchema, BulkActionSchema, AdvanceActionSchema, UnipileImportSchema
 from app.core.state_machine import StateMachine
+from sqlalchemy import or_
 router = APIRouter(prefix="/prospects", tags=["Prospects"])
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ async def create_prospect(
         email=payload.email,
         linkedin_url=str(payload.linkedin_url),
         phone_number=payload.phone_number,
-        current_state="PROSPECT_CREATED"
+        current_state="PENDING_ACCEPTANCE"
     )
     db.add(prospect)
 
@@ -64,10 +65,18 @@ async def create_prospect(
         id=str(uuid.uuid4()),
         tenant_id=tenant_id,
         prospect_id=prospect_id,
-        state="PROSPECT_CREATED",
-        payload={}
+        state="PENDING_ACCEPTANCE",
+        payload={
+            "linkedin_step_count": 0,
+            "email_step_count": 0,
+            "call_step_count": 0,
+            "reply_received": False
+        }
     )
     db.add(wf_state)
+
+    # 2.5 Update the Prospect current_state as well
+    prospect.current_state = "PENDING_ACCEPTANCE"
 
     # 3. Log event timeline metrics
     timeline_event = ActivityTimeline(
@@ -87,7 +96,7 @@ async def create_prospect(
         "event_type": "PROSPECT_CREATED",
         "prospect_id": prospect_id,
         "tenant_id": tenant_id,
-        "state": "PROSPECT_CREATED",
+        "state": "PENDING_ACCEPTANCE",
         "timestamp": datetime.utcnow().isoformat()
     }
     await redis.publish(f"tenant_updates:{tenant_id}", json.dumps(event_payload))
@@ -127,6 +136,82 @@ async def list_prospects(
         "data": prospects
     }
 
+@router.post("/import-from-unipile", status_code=status.HTTP_200_OK)
+async def import_from_unipile(
+    payload: UnipileImportSchema,
+    tenant_id: str = Depends(verify_tenant),
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis)
+):
+    """
+    Imports selected profiles from Unipile Live Search.
+    Filters out duplicates by provider_id.
+    Sets status = IDLE to trigger the autonomous pipeline instantly.
+    """
+    from app.models.schemas import ProspectStatus
+    
+    imported_count = 0
+    skipped_count = 0
+
+    for profile in payload.profiles:
+        # Check duplicate by provider_id
+        query = select(Prospect).where(
+            Prospect.tenant_id == tenant_id,
+            Prospect.provider_id == profile.provider_id
+        )
+        existing = await db.execute(query)
+        if existing.scalar_one_or_none():
+            skipped_count += 1
+            continue
+
+        prospect_id = str(uuid.uuid4())
+        prospect = Prospect(
+            id=prospect_id,
+            tenant_id=tenant_id,
+            campaign_id=payload.campaign_id,
+            first_name=profile.first_name,
+            last_name=profile.last_name,
+            email=profile.email or f"placeholder_{prospect_id}@example.com",
+            linkedin_url=profile.linkedin_url or "",
+            phone_number=None,
+            company_name=profile.organization_name,
+            provider_id=profile.provider_id,
+            current_state=profile.title or "Unipile Import",
+            status=ProspectStatus.IDLE,
+            call_attempts=0,
+            next_action_at=datetime.utcnow()
+        )
+        db.add(prospect)
+
+        wf_state = WorkflowState(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant_id,
+            prospect_id=prospect_id,
+            state="IDLE",
+            payload={}
+        )
+        db.add(wf_state)
+
+        timeline = ActivityTimeline(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant_id,
+            prospect_id=prospect_id,
+            channel="SYSTEM",
+            event_type="SYSTEM_EVENT",
+            description="Imported from Unipile Live Search. Pipeline activated."
+        )
+        db.add(timeline)
+        
+        imported_count += 1
+        
+    await db.commit()
+
+    return {
+        "status": "success",
+        "imported": imported_count,
+        "skipped": skipped_count
+    }
+
 @router.get("/stream")
 async def stream_prospect_updates(
     tenant_id: str = Depends(verify_tenant),
@@ -159,7 +244,15 @@ async def stream_prospect_updates(
         finally:
             await pubsub.close()
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 @router.post("/bulk-action", status_code=status.HTTP_200_OK)
 async def bulk_action(

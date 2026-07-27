@@ -4,11 +4,12 @@ import { useState } from "react";
 import useSWR from "swr";
 import { motion, AnimatePresence } from "framer-motion";
 import { Sparkles, Download, Upload, Grid, List, Layout, Plus, MessageSquare, Mail, Phone, Settings, AlertCircle, ChevronDown } from "lucide-react";
+import { API_BASE_URL } from "@/lib/config";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 export default function SequencesPage() {
-  const { data, error, mutate } = useSWR("http://localhost:8000/api/v1/sequences/current", fetcher);
+  const { data, error, mutate } = useSWR(`${API_BASE_URL}/sequences/current`, fetcher);
 
   const [saving, setSaving] = useState(false);
 
@@ -24,13 +25,14 @@ export default function SequencesPage() {
     ai_guided_calls: true,
     call_mode: "MANUAL",
     assigned_lead_owner_id: "Admin",
-    auto_handover_to_admin: true
+    auto_handover_to_admin: true,
+    dev_mode: false
   };
 
   const steps = data?.steps || [];
 
   const handleRuleChange = async (key: string, value: any) => {
-    if (!data?.rule) return;
+    if (!data) return;
     setSaving(true);
     const updatedRule = { ...rules, [key]: value };
     
@@ -38,7 +40,7 @@ export default function SequencesPage() {
     mutate({ rule: updatedRule, steps }, false);
     
     try {
-      await fetch("http://localhost:8000/api/v1/sequences/rules", {
+      await fetch(`${API_BASE_URL}/sequences/rules`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(updatedRule)
@@ -105,7 +107,7 @@ export default function SequencesPage() {
                   value={rules.max_linkedin_msgs}
                   onChange={(e) => handleRuleChange("max_linkedin_msgs", parseInt(e.target.value))}
                 >
-                  {[1,2,3,4,5].map(d => <option key={d} value={d} className="bg-neutral-900">{d}</option>)}
+                  {[0,1,2,3,4,5].map(d => <option key={d} value={d} className="bg-neutral-900">{d}</option>)}
                 </select>
               </div>
             </div>
@@ -221,6 +223,27 @@ export default function SequencesPage() {
           
           <div className="p-5 flex-1 overflow-y-auto flex flex-col gap-8">
             
+            {/* DEV/TEST MODE TOGGLE */}
+            <div className="p-4 bg-orange-500/10 border border-orange-500/30 rounded-xl space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-orange-400 font-semibold">
+                  <Settings size={16} /> Dev/Test Mode
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    checked={!!rules.dev_mode} 
+                    onChange={(e) => handleRuleChange("dev_mode", e.target.checked)} 
+                    className="sr-only peer" 
+                  />
+                  <div className="w-9 h-5 bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-orange-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-orange-500"></div>
+                </label>
+              </div>
+              <p className="text-xs text-orange-400/80 leading-relaxed">
+                When enabled, all scheduling intervals (days/hours) are overridden to exactly <strong>60 seconds</strong> for rapid end-to-end pipeline testing.
+              </p>
+            </div>
+
             {/* Section 1: Response */}
             <div className="space-y-3">
               <label className="text-sm font-medium text-neutral-300 flex items-center gap-2">

@@ -15,9 +15,10 @@ class TwilioClient:
         self.client = http_client
         self.base_url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}" if account_sid else ""
 
-    async def initiate_call(self, to_number: str, twimlet_url: str) -> Dict[str, Any]:
+    async def initiate_call(self, to_number: str, twimlet_url: Optional[str] = None, twiml: Optional[str] = None) -> Dict[str, Any]:
         """
         Triggers an automated dial job using the Twilio voice platform.
+        Supports either Url or inline Twiml for Media Streams.
         """
         # If Twilio values are default/stub credentials, fall back to mock data
         if not self.account_sid or "ACabcdef" in self.account_sid or not self.auth_token:
@@ -30,9 +31,12 @@ class TwilioClient:
         url = f"{self.base_url}/Calls.json"
         data = {
             "To": to_number,
-            "From": self.from_number,
-            "Url": twimlet_url
+            "From": self.from_number
         }
+        if twiml:
+            data["Twiml"] = twiml
+        elif twimlet_url:
+            data["Url"] = twimlet_url
         
         try:
             response = await self.client.post(
@@ -42,8 +46,10 @@ class TwilioClient:
                 timeout=10.0
             )
             if response.status_code in [200, 201]:
-                return response.json()
-            logger.warning(f"Twilio API returned status: {response.status_code}")
+                res_data = response.json()
+                logger.info(f"Twilio Call placed successfully to {to_number}. Call SID: {res_data.get('sid')}")
+                return res_data
+            logger.warning(f"Twilio API returned status {response.status_code}: {response.text}")
         except Exception as e:
             logger.error(f"Twilio call placement request failed: {str(e)}")
 

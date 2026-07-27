@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from app.database import get_db
+from sqlalchemy import select, update
+from app.database import get_db, AsyncSessionLocal
 from app.services.agent import agent_orchestrator
 from app.models.schemas import Prospect, SequenceRule, FollowUp
 from app.core.state_machine import StateMachine
@@ -30,6 +30,11 @@ class IncomingReplyPayload(BaseModel):
 class WebhookResponse(BaseModel):
     status: str
     message: str
+
+class ConnectionAcceptedPayload(BaseModel):
+    prospect_id: str
+    linkedin_url: Optional[str] = None
+    provider_id: Optional[str] = None
 
 # --- Endpoints ---
 
@@ -61,58 +66,122 @@ async def trigger_n8n_outreach(payload: ProspectEnrichedPayload, background_task
 
 
 @router.post("/reply-received", response_model=WebhookResponse)
-async def receive_n8n_reply(payload: IncomingReplyPayload, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
+async def receive_n8n_reply(payload: IncomingReplyPayload, background_tasks: BackgroundTasks):
     """
     Receives incoming replies categorized/processed through n8n.
     """
     logger.info(f"Received n8n reply webhook for prospect {payload.prospect_id} via {payload.channel}")
 
     async def process_reply():
-        try:
-            # Utilize Gemini Agent Tool Calling to classify intent strictly
-            classification = await agent_orchestrator.classify_intent(payload.message)
-            intent = classification.get("intent", "UNKNOWN")
-            logger.info(f"Agent classified reply from {payload.prospect_id} as: {intent}")
-            
-            # Here we would update prospect state (e.g. pause sequence if intent is MEETING_REQUESTED)
-            if intent in ["MEETING_REQUESTED", "REFUSAL", "QUESTION"]:
-                logger.info(f"Checking sequence rules for {payload.prospect_id} due to intent: {intent}")
+        async with AsyncSessionLocal() as db:
+            try:
+                # Utilize Gemini Agent Tool Calling to classify intent strictly
+                classification = await agent_orchestrator.classify_intent(payload.message)
+                intent = classification.get("intent", "UNKNOWN")
+                logger.info(f"Agent classified reply from {payload.prospect_id} as: {intent}")
                 
-                # Fetch prospect and tenant
-                p_res = await db.execute(select(Prospect).where(Prospect.id == payload.prospect_id))
-                prospect = p_res.scalar_one_or_none()
-                if not prospect:
-                    return
+                # Here we would update prospect state (e.g. pause sequence if intent is MEETING_REQUESTED)
+                if intent in ["MEETING_REQUESTED", "REFUSAL", "QUESTION"]:
+                    logger.info(f"Checking sequence rules for {payload.prospect_id} due to intent: {intent}")
+                    
+                    # Fetch prospect and tenant
+                    p_res = await db.execute(select(Prospect).where(Prospect.id == payload.prospect_id))
+                    prospect = p_res.scalar_one_or_none()
+                    if not prospect:
+                        return
 
-                # Fetch sequence rule
-                rule_res = await db.execute(select(SequenceRule).where(SequenceRule.tenant_id == prospect.tenant_id))
-                rule = rule_res.scalar_one_or_none()
-                
-                action = rule.response_handling_action if rule else "PAUSE_AND_NOTIFY"
-                
-                if action == "PAUSE_AND_NOTIFY":
-                    logger.info("Sequence Rule is PAUSE_AND_NOTIFY. Transitioning to CONVERSATION_ACTIVE.")
+                    # Fetch sequence rule
+                    rule_res = await db.execute(select(SequenceRule).where(SequenceRule.tenant_id == prospect.tenant_id))
+                    rule = rule_res.scalar_one_or_none()
                     
-                    # Update prospect status
-                    prospect.current_state = "CONVERSATION_ACTIVE"
+                    action = rule.response_handling_action if rule else "PAUSE_AND_NOTIFY"
                     
-                    # Cancel any pending follow ups
-                    f_res = await db.execute(select(FollowUp).where(
-                        FollowUp.prospect_id == prospect.id,
-                        FollowUp.status == "PENDING"
-                    ))
-                    for f in f_res.scalars():
-                        f.status = "CANCELED"
+                    if action == "PAUSE_AND_NOTIFY":
+                        logger.info("Sequence Rule is PAUSE_AND_NOTIFY. Transitioning to CONVERSATION_ACTIVE.")
                         
-                    await db.commit()
-                    
-                    # In a real app we'd dispatch an SSE event and notify assigned_lead_owner_id
-                else:
-                    logger.info("Sequence Rule is CONTINUE. Automated follow ups remain active.")
-                    
-        except Exception as e:
-            logger.error(f"Failed to process reply for {payload.prospect_id}: {e}")
+                        # Update prospect status
+                        prospect.current_state = "CONVERSATION_ACTIVE"
+                        
+                        # Cancel any pending follow ups
+                        await db.execute(
+                            update(FollowUp)
+                            .where(FollowUp.prospect_id == prospect.id, FollowUp.status == "PENDING")
+                            .values(status="CANCELED")
+                        )
+                            
+                        await db.commit()
+                        
+                        # In a real app we'd dispatch an SSE event and notify assigned_lead_owner_id
+                    else:
+                        logger.info("Sequence Rule is CONTINUE. Automated follow ups remain active.")
+                        
+            except Exception as e:
+                logger.error(f"Failed to process reply for {payload.prospect_id}: {e}")
 
     background_tasks.add_task(process_reply)
     
     return WebhookResponse(status="success", message="Reply accepted and queued for classification.")
+
+from app.database import get_redis
+from arq import create_pool
+from arq.connections import RedisSettings
+from app.config import settings
+import uuid
+from datetime import datetime
+
+@router.post("/connection-accepted", response_model=WebhookResponse)
+async def receive_connection_accepted(payload: ConnectionAcceptedPayload, background_tasks: BackgroundTasks):
+    """
+    Receives LinkedIn connection accepted webhook from Unipile/n8n.
+    """
+    logger.info(f"Received CONNECTION_ACCEPTED webhook for prospect {payload.prospect_id}")
+
+    async def process_acceptance():
+        async with AsyncSessionLocal() as db:
+            try:
+                p_res = await db.execute(select(Prospect).where(Prospect.id == payload.prospect_id))
+                prospect = p_res.scalar_one_or_none()
+                if not prospect:
+                    logger.error(f"Prospect {payload.prospect_id} not found for connection acceptance.")
+                    return
+
+                from app.database import redis_client
+                redis = redis_client
+
+                # Transition state to CONNECTION_ACCEPTED
+                await StateMachine.transition(
+                    db=db,
+                    redis=redis,
+                    prospect_id=prospect.id,
+                    new_state="CONNECTION_ACCEPTED",
+                    event_trigger="Webhook Confirmed",
+                    payload_updates={"provider_id": payload.provider_id}
+                )
+
+                # Dispatch SSE event
+                event_payload = {
+                    "event_type": "CONNECTION_ACCEPTED",
+                    "prospect_id": prospect.id,
+                    "tenant_id": prospect.tenant_id,
+                    "state": "CONNECTION_ACCEPTED",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                await redis.publish(f"tenant_updates:{prospect.tenant_id}", json.dumps(event_payload))
+
+                # Queue the initial personalized message execution via ARQ
+                arq_pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
+                try:
+                    await arq_pool.enqueue_job(
+                        'execute_initial_message_task',
+                        prospect.id,
+                        tenant_id=prospect.tenant_id
+                    )
+                finally:
+                    await arq_pool.close()
+
+                await db.commit()
+            except Exception as e:
+                logger.error(f"Failed to process connection acceptance for {payload.prospect_id}: {e}")
+
+    background_tasks.add_task(process_acceptance)
+    return WebhookResponse(status="success", message="Connection acceptance queued.")

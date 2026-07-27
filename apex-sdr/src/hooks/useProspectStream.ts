@@ -18,8 +18,9 @@ export function useProspectStream(onEvent: (data: any) => void) {
     };
 
     eventSource.onerror = (err) => {
-      console.error("EventSource failed:", err);
-      eventSource.close();
+      if (eventSource.readyState === EventSource.CLOSED) {
+        console.warn("SSE connection closed by server. Browser will auto-reconnect.");
+      }
     };
 
     return () => {

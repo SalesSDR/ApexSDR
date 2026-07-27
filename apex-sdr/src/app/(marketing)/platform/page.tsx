@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { ArrowRight, Bot, Shield, Database, Zap, Search, Mail, Lock, Server, CheckCircle2, Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { APP_URL } from "@/lib/config";
 
 const pillars = [
   {
@@ -86,10 +87,10 @@ export default function PlatformPage() {
               className="flex flex-col sm:flex-row items-center gap-4"
             >
               <Link 
-                href="/prospect/active-queue" 
+                href="/demo"
                 className="w-full sm:w-auto flex items-center justify-center gap-2 bg-white text-black px-8 py-4 rounded-full font-bold text-lg hover:bg-gray-200 transition-all"
               >
-                Launch App <ArrowRight size={18} />
+                Book a Live Demo <ArrowRight size={18} />
               </Link>
               <Link 
                 href="/solutions" 
@@ -300,10 +301,10 @@ export default function PlatformPage() {
             Deploy Your Digital SDR Workforce Today
           </h2>
           <Link 
-            href="/prospect/active-queue" 
+            href="/demo"
             className="flex items-center justify-center gap-2 bg-[#E5D5C5] text-black px-10 py-5 rounded-full font-bold text-xl hover:bg-white transition-all shadow-[0_0_40px_rgba(229,213,197,0.3)] hover:shadow-[0_0_60px_rgba(255,255,255,0.4)]"
           >
-            Access Apex SDR Workspace <ArrowRight size={20} />
+            Book a Live Demo <ArrowRight size={20} />
           </Link>
         </div>
       </section>

@@ -16,10 +16,13 @@ class UnipileClient:
         self.client = http_client
 
     def _headers(self) -> Dict[str, str]:
-        return {
+        h = {
             "X-API-KEY": self.api_key,
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "accept": "application/json"
         }
+        logger.info(f"Unipile Headers: {h}")
+        return h
 
     async def send_linkedin_connection(self, linkedin_url: str, account_id: str, message: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -63,6 +66,32 @@ class UnipileClient:
         logger.error(error_msg)
         raise Exception(error_msg)
 
+    async def check_connection_relation(self, account_id: str, provider_id: str) -> bool:
+        """
+        Fallback logic to explicitly check connection relation by provider_id.
+        Hits Unipile's GET /users/{provider_id} and evaluates network relation.
+        """
+        url = f"{self.base_url}/users/{provider_id}"
+        logger.info(f"Unipile fallback connection check for {provider_id}")
+        
+        try:
+            response = await self.client.get(
+                url, 
+                params={"account_id": account_id}, 
+                headers=self._headers(), 
+                timeout=10.0
+            )
+            if response.status_code == 200:
+                data = response.json()
+                relation = data.get("network_distance") or data.get("relation")
+                # Usually FIRST_DEGREE or CONNECTED indicates an active connection
+                if relation in ["FIRST_DEGREE", "CONNECTED", 1, "1"]:
+                    return True
+        except Exception as e:
+            logger.warning(f"Unipile polling fallback check failed ({str(e)}).")
+
+        return False
+
     async def get_invitation_status(self, invitation_id: str) -> Tuple[bool, Dict[str, Any]]:
         """
         Polls Unipile to verify invitation acceptances.
@@ -76,25 +105,39 @@ class UnipileClient:
                 data = response.json()
                 return data.get("status") == "accepted", data
         except Exception as e:
-            logger.warning(f"Unipile polling check failed ({str(e)}). Simulating fallback dynamic result.")
+            logger.warning(f"Unipile polling check failed ({str(e)}).")
 
-        # Simulated behavior for development/demonstration
-        accepted = True
-        return accepted, {
-            "status": "accepted" if accepted else "pending",
-            "invitation_id": invitation_id
-        }
-
-    async def send_linkedin_message(self, chat_id: str, text: str) -> Dict[str, Any]:
+        return False, {}
+    async def send_linkedin_message(self, account_id: str, provider_id: str, text: str) -> Dict[str, Any]:
         """
         Sends a direct message on LinkedIn.
+        Resolves the LinkedIn public identifier to a Unipile internal provider_id first.
         """
-        url = f"{self.base_url}/linkedin/messages"
+        # First resolve the identifier to an internal provider_id
+        resolved_id = provider_id
+        try:
+            resolve_url = f"{self.base_url}/users/{provider_id}"
+            res_response = await self.client.get(
+                resolve_url,
+                params={"account_id": account_id},
+                headers=self._headers(),
+                timeout=10.0
+            )
+            if res_response.status_code == 200:
+                resolved_id = res_response.json().get("provider_id", provider_id)
+                logger.info(f"Resolved LinkedIn identifier {provider_id} -> {resolved_id}")
+            else:
+                logger.warning(f"Could not resolve provider_id for {provider_id}: {res_response.status_code}, using raw identifier")
+        except Exception as e:
+            logger.warning(f"Exception resolving provider_id for messaging: {str(e)}, using raw identifier")
+
+        url = f"{self.base_url}/chats"
         payload = {
-            "chat_id": chat_id,
+            "account_id": account_id,
+            "attendees_ids": [resolved_id],
             "text": text
         }
-        logger.info(f"Unipile dispatching direct chat message to chat: {chat_id}")
+        logger.info(f"Unipile dispatching direct chat message to: {resolved_id} (original: {provider_id})")
         
         response = await self.client.post(url, json=payload, headers=self._headers(), timeout=10.0)
         if response.status_code in [200, 201]:
@@ -108,10 +151,10 @@ class UnipileClient:
         """
         Dispatches cold outbound emails.
         """
-        url = f"{self.base_url}/email/send"
+        url = f"{self.base_url}/emails"
         payload = {
             "account_id": account_id,
-            "to": [recipient],
+            "to": [{"identifier": recipient}],
             "subject": subject,
             "body": text
         }

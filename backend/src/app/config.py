@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     UNIPILE_API_KEY: str = Field("unip_live_stub", validation_alias="UNIPILE_API_KEY")
     UNIPILE_BASE_URL: str = Field("https://api.unipile.com/api/v1", validation_alias="UNIPILE_BASE_URL")
     UNIPILE_ACCOUNT_ID: Optional[str] = Field(None, validation_alias="UNIPILE_ACCOUNT_ID")
+    UNIPILE_EMAIL_ACCOUNT_ID: Optional[str] = Field(None, validation_alias="UNIPILE_EMAIL_ACCOUNT_ID")
 
     # Apollo Integration
     APOLLO_API_KEY: Optional[str] = Field(None, validation_alias="APOLLO_API_KEY")
@@ -23,6 +24,7 @@ class Settings(BaseSettings):
     TWILIO_ACCOUNT_SID: Optional[str] = Field(None, validation_alias="TWILIO_ACCOUNT_SID")
     TWILIO_AUTH_TOKEN: Optional[str] = Field(None, validation_alias="TWILIO_AUTH_TOKEN")
     TWILIO_FROM_NUMBER: Optional[str] = Field(None, validation_alias="TWILIO_FROM_NUMBER")
+    NGROK_DOMAIN: Optional[str] = Field("YOUR_NGROK_DOMAIN", validation_alias="NGROK_DOMAIN")
 
     # Gemini Integration
     GEMINI_API_KEY: Optional[str] = Field(None, validation_alias="GEMINI_API_KEY")

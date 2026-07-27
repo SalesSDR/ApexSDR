@@ -44,6 +44,7 @@ function RadioOption({
         background: checked ? "rgba(59,130,246,0.1)" : undefined,
         border: checked ? "1px solid rgba(59,130,246,0.25)" : "1px solid transparent",
       }}
+      onClick={onChange}
     >
       <div
         className="w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0 transition-all"
@@ -79,6 +80,7 @@ function CheckOption({
     <label
       className="flex items-center gap-2.5 px-3 py-2 rounded-md cursor-pointer transition-all hover:bg-white/5"
       style={{ opacity: dimmed ? 0.5 : 1 }}
+      onClick={onChange}
     >
       <div
         className="w-3.5 h-3.5 rounded-sm flex items-center justify-center flex-shrink-0 transition-all"
@@ -172,9 +174,8 @@ function TagInput({
 
 // ─── Filter Panels per Category ───────────────────────────────────────────────
 
-function JobTitlesPanel({ filters }: { filters?: ICPFilters | null }) {
+function JobTitlesPanel({ filters, tags, setTags }: { filters?: ICPFilters | null, tags: string[], setTags: React.Dispatch<React.SetStateAction<string[]>> }) {
   const [mode, setMode] = useState<"is-any-of" | "is-known" | "is-unknown">("is-any-of");
-  const [tags, setTags] = useState<string[]>([]);
   const [includeManagement, setIncludeManagement] = useState(false);
   const [excludeSenior, setExcludeSenior] = useState(false);
 
@@ -183,7 +184,7 @@ function JobTitlesPanel({ filters }: { filters?: ICPFilters | null }) {
     if (filters?.jobTitles) {
       setTags(filters.jobTitles.map(t => t.label));
     }
-  }, [filters]);
+  }, [filters, setTags]);
 
   return (
     <div className="space-y-1 pb-1">
@@ -242,8 +243,7 @@ function JobTitlesPanel({ filters }: { filters?: ICPFilters | null }) {
   );
 }
 
-function PeopleLookalikesPanel() {
-  const [tags, setTags] = useState<string[]>([]);
+function PeopleLookalikesPanel({ tags, setTags }: { tags: string[], setTags: React.Dispatch<React.SetStateAction<string[]>> }) {
   return (
     <div className="space-y-2 px-3 pb-3">
       <p className="text-xs" style={{ color: "var(--apex-muted)" }}>
@@ -263,9 +263,8 @@ function PeopleLookalikesPanel() {
   );
 }
 
-function CompanyPanel() {
+function CompanyPanel({ tags, setTags }: { tags: string[], setTags: React.Dispatch<React.SetStateAction<string[]>> }) {
   const [mode, setMode] = useState<"is-any-of" | "is-known" | "is-unknown">("is-any-of");
-  const [tags, setTags] = useState<string[]>([]);
   const [isNotAnyOf, setIsNotAnyOf] = useState(false);
   const [includePast, setIncludePast] = useState(false);
   const [excludePast, setExcludePast] = useState(false);
@@ -308,10 +307,9 @@ function CompanyPanel() {
   );
 }
 
-function LocationPanel({ filters }: { filters?: ICPFilters | null }) {
+function LocationPanel({ filters, locationTags, setLocationTags }: { filters?: ICPFilters | null, locationTags: string[], setLocationTags: React.Dispatch<React.SetStateAction<string[]>> }) {
   const [tab, setTab] = useState<"contact" | "account-hq">("contact");
   const [mode, setMode] = useState<"region" | "zip-radius">("region");
-  const [locationTags, setLocationTags] = useState<string[]>([]);
   const [showExclude, setShowExclude] = useState(false);
   const [excludeTags, setExcludeTags] = useState<string[]>([]);
 
@@ -320,7 +318,7 @@ function LocationPanel({ filters }: { filters?: ICPFilters | null }) {
     if (filters?.locations) {
       setLocationTags(filters.locations.map(t => t.label));
     }
-  }, [filters]);
+  }, [filters, setLocationTags]);
 
   return (
     <div className="space-y-2 pb-2">
@@ -400,9 +398,8 @@ function LocationPanel({ filters }: { filters?: ICPFilters | null }) {
   );
 }
 
-function IndustryKeywordsPanel({ filters }: { filters?: ICPFilters | null }) {
+function IndustryKeywordsPanel({ filters, keywordTags, setKeywordTags }: { filters?: ICPFilters | null, keywordTags: string[], setKeywordTags: React.Dispatch<React.SetStateAction<string[]>> }) {
   const [includeKeywords, setIncludeKeywords] = useState(true);
-  const [keywordTags, setKeywordTags] = useState<string[]>([]);
   const [includeAll, setIncludeAll] = useState(false);
   const [excludeKeywords, setExcludeKeywords] = useState(false);
   const [excludeTags, setExcludeTags] = useState<string[]>([]);
@@ -412,7 +409,7 @@ function IndustryKeywordsPanel({ filters }: { filters?: ICPFilters | null }) {
     if (filters?.keywords) {
       setKeywordTags(filters.keywords.map(t => t.label));
     }
-  }, [filters]);
+  }, [filters, setKeywordTags]);
 
   return (
     <div className="space-y-1 pb-1">
@@ -488,15 +485,14 @@ function IndustryKeywordsPanel({ filters }: { filters?: ICPFilters | null }) {
   );
 }
 
-function TechnologyStackPanel({ filters }: { filters?: ICPFilters | null }) {
+function TechnologyStackPanel({ filters, tags, setTags }: { filters?: ICPFilters | null, tags: string[], setTags: React.Dispatch<React.SetStateAction<string[]>> }) {
   const [mode, setMode] = useState<"is-any-of" | "is-known" | "is-unknown">("is-any-of");
-  const [tags, setTags] = useState<string[]>([]);
 
   useEffect(() => {
     if (filters?.technology) {
       setTags(filters.technology.map(t => t.label));
     }
-  }, [filters]);
+  }, [filters, setTags]);
 
   return (
     <div className="space-y-1 pb-1">
@@ -536,61 +532,93 @@ interface CategoryConfig {
   activeCount?: number;
 }
 
-const CATEGORIES: CategoryConfig[] = [
-  {
-    id: "job-titles",
-    label: "Job Titles",
-    icon: <Briefcase size={14} />,
-    panel: (filters) => <JobTitlesPanel filters={filters} />,
-    activeCount: 2,
-  },
-  {
-    id: "people-lookalikes",
-    label: "People Lookalikes",
-    icon: <Users size={14} />,
-    panel: (filters) => <PeopleLookalikesPanel />,
-  },
-  {
-    id: "company",
-    label: "Company",
-    icon: <Building2 size={14} />,
-    panel: (filters) => <CompanyPanel />,
-  },
-  {
-    id: "location",
-    label: "Location",
-    icon: <MapPin size={14} />,
-    panel: (filters) => <LocationPanel filters={filters} />,
-    activeCount: 3,
-  },
-  {
-    id: "industry-keywords",
-    label: "Industry & Keywords",
-    icon: <Tag size={14} />,
-    panel: (filters) => <IndustryKeywordsPanel filters={filters} />,
-    activeCount: 3,
-  },
-  {
-    id: "technology-stack",
-    label: "Technology Stack",
-    icon: <Cpu size={14} />,
-    panel: (filters) => <TechnologyStackPanel filters={filters} />,
-    activeCount: 3,
-  },
-];
-
 // ─── Main ICPSidebar ──────────────────────────────────────────────────────────
 
-export function ICPSidebar({ filters }: ICPSidebarProps) {
+interface ICPSidebarProps {
+  filters?: ICPFilters | null;
+  onApplyFilters?: (prompt: string) => void;
+}
+
+export function ICPSidebar({ filters, onApplyFilters }: ICPSidebarProps) {
   const [openCategory, setOpenCategory] = useState<string>("job-titles");
+  
+  // Lifted state
+  const [jobTitles, setJobTitles] = useState<string[]>([]);
+  const [peopleLookalikes, setPeopleLookalikes] = useState<string[]>([]);
+  const [companies, setCompanies] = useState<string[]>([]);
+  const [locations, setLocations] = useState<string[]>([]);
+  const [keywords, setKeywords] = useState<string[]>([]);
+  const [technologies, setTechnologies] = useState<string[]>([]);
+
+  const CATEGORIES = [
+    {
+      id: "job-titles",
+      label: "Job Titles",
+      icon: <Briefcase size={14} />,
+      panel: (filters: ICPFilters | null | undefined) => <JobTitlesPanel filters={filters} tags={jobTitles} setTags={setJobTitles} />,
+      activeCount: jobTitles.length > 0 ? jobTitles.length : undefined,
+    },
+    {
+      id: "people-lookalikes",
+      label: "People Lookalikes",
+      icon: <Users size={14} />,
+      panel: () => <PeopleLookalikesPanel tags={peopleLookalikes} setTags={setPeopleLookalikes} />,
+      activeCount: peopleLookalikes.length > 0 ? peopleLookalikes.length : undefined,
+    },
+    {
+      id: "company",
+      label: "Company",
+      icon: <Building2 size={14} />,
+      panel: () => <CompanyPanel tags={companies} setTags={setCompanies} />,
+      activeCount: companies.length > 0 ? companies.length : undefined,
+    },
+    {
+      id: "location",
+      label: "Location",
+      icon: <MapPin size={14} />,
+      panel: (filters: ICPFilters | null | undefined) => <LocationPanel filters={filters} locationTags={locations} setLocationTags={setLocations} />,
+      activeCount: locations.length > 0 ? locations.length : undefined,
+    },
+    {
+      id: "industry-keywords",
+      label: "Industry & Keywords",
+      icon: <Tag size={14} />,
+      panel: (filters: ICPFilters | null | undefined) => <IndustryKeywordsPanel filters={filters} keywordTags={keywords} setKeywordTags={setKeywords} />,
+      activeCount: keywords.length > 0 ? keywords.length : undefined,
+    },
+    {
+      id: "technology-stack",
+      label: "Technology Stack",
+      icon: <Cpu size={14} />,
+      panel: (filters: ICPFilters | null | undefined) => <TechnologyStackPanel filters={filters} tags={technologies} setTags={setTechnologies} />,
+      activeCount: technologies.length > 0 ? technologies.length : undefined,
+    },
+  ];
 
   const toggle = (id: string) => {
     setOpenCategory((prev) => (prev === id ? "" : id));
   };
+  
+  const handleApply = () => {
+    if (!onApplyFilters) return;
+    const parts = [];
+    if (jobTitles.length > 0) parts.push(`Job Titles: [${jobTitles.join(", ")}]`);
+    if (companies.length > 0) parts.push(`Companies: [${companies.join(", ")}]`);
+    if (locations.length > 0) parts.push(`Locations: [${locations.join(", ")}]`);
+    if (keywords.length > 0) parts.push(`Keywords: [${keywords.join(", ")}]`);
+    if (technologies.length > 0) parts.push(`Tech Stack: [${technologies.join(", ")}]`);
+    if (peopleLookalikes.length > 0) parts.push(`Lookalikes: [${peopleLookalikes.join(", ")}]`);
+    
+    if (parts.length === 0) {
+      onApplyFilters("Find a general list of prospects.");
+    } else {
+      onApplyFilters(`Find prospects with ${parts.join(", ")}`);
+    }
+  };
 
   return (
     <div
-      className="w-64 flex-shrink-0 flex flex-col overflow-y-auto"
+      className="w-64 flex-shrink-0 flex flex-col overflow-hidden"
       style={{
         borderRight: "1px solid var(--apex-border)",
         background: "var(--apex-surface)",
@@ -611,7 +639,7 @@ export function ICPSidebar({ filters }: ICPSidebarProps) {
       </div>
 
       {/* Categories accordion */}
-      <div className="flex-1 py-1">
+      <div className="flex-1 overflow-y-auto py-1">
         {CATEGORIES.map((cat) => {
           const isOpen = openCategory === cat.id;
           return (
@@ -691,9 +719,15 @@ export function ICPSidebar({ filters }: ICPSidebarProps) {
 
       {/* Advanced Filters footer */}
       <div
-        className="px-4 py-3 flex-shrink-0"
+        className="px-4 py-3 flex-shrink-0 flex flex-col gap-2"
         style={{ borderTop: "1px solid var(--apex-border)" }}
       >
+        <button
+          onClick={handleApply}
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg transition-colors"
+        >
+          <Search size={14} /> Apply Filters
+        </button>
         <button
           className="w-full flex items-center justify-between px-3 py-2 rounded-lg hover:bg-white/5 transition-colors"
           style={{ color: "var(--apex-muted)", border: "1px solid var(--apex-border)" }}

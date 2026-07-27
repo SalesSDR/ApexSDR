@@ -13,7 +13,7 @@ async def generate_outreach_message(prospect_name: str, company: str, prompt_typ
     """
     try:
         genai.configure(api_key=settings.GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        model = genai.GenerativeModel('gemini-2.5-pro')
         
         if prompt_type == "linkedin":
             prompt = f"Write a 2-3 sentence personalized LinkedIn outreach message to {prospect_name}. They work at {company or 'their company'}. Keep it professional but casual, mentioning automation strategies."
@@ -70,7 +70,7 @@ async def parse_icp_query(query: str, fallback_mode: bool = True) -> dict:
     
     try:
         genai.configure(api_key=settings.GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-2.0-flash', system_instruction=system_prompt)
+        model = genai.GenerativeModel('gemini-2.5-pro', system_instruction=system_prompt)
         
         response = await model.generate_content_async(
             f"User Query: {query}",

@@ -1,9 +1,10 @@
 import uuid
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import String, Integer, Boolean, Text, ForeignKey, DateTime, Index, func
+from sqlalchemy import String, Integer, Boolean, Text, ForeignKey, DateTime, Index, func, Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import JSONB
+import enum
 
 from app.models.base import Base, TenantMixin
 
@@ -18,6 +19,20 @@ class WorkspaceSetting(Base, TenantMixin):
     working_hours_end: Mapped[str] = mapped_column(String(5), default="17:00")    # HH:MM
     timezone: Mapped[str] = mapped_column(String(50), default="UTC")
     exclude_weekends: Mapped[bool] = mapped_column(Boolean, default=True)
+    dev_mode: Mapped[bool] = mapped_column(Boolean, default=False)
+
+class ProspectStatus(enum.Enum):
+    IDLE = "IDLE"
+    LI_REQ_SENT = "LI_REQ_SENT"
+    LI_ACCEPTED_NO_MSG = "LI_ACCEPTED_NO_MSG"
+    LI_MSG_SENT = "LI_MSG_SENT"
+    EMAIL_SENT = "EMAIL_SENT"
+    CALL_QUEUED = "CALL_QUEUED"
+    CALL_IN_PROGRESS = "CALL_IN_PROGRESS"
+    MEETING_BOOKED = "MEETING_BOOKED"
+    PAUSED_NUDGED = "PAUSED_NUDGED"
+    COMPLETED_DECLINED = "COMPLETED_DECLINED"
+    UNRESPONSIVE_DEAD = "UNRESPONSIVE_DEAD"
 
 class Campaign(Base, TenantMixin):
     __tablename__ = "campaigns"
@@ -41,6 +56,12 @@ class Prospect(Base, TenantMixin):
     company_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     provider_id: Mapped[Optional[str]] = mapped_column(String(100), index=True, nullable=True)
     current_state: Mapped[str] = mapped_column(String(50), default="PROSPECT_CREATED", index=True, nullable=False)
+    
+    # New strict pipeline fields
+    status: Mapped[ProspectStatus] = mapped_column(SQLEnum(ProspectStatus), default=ProspectStatus.IDLE, nullable=False)
+    call_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_call_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_action_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     
     # Relationships
     campaign = relationship("Campaign", back_populates="prospects")
@@ -70,6 +91,7 @@ class FollowUp(Base, TenantMixin):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     prospect_id: Mapped[str] = mapped_column(ForeignKey("prospects.id", ondelete="CASCADE"), nullable=False)
     sequence_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    channel: Mapped[str] = mapped_column(String(20), default="LINKEDIN", nullable=False)
     scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="PENDING", index=True, nullable=False)  # PENDING, EXECUTED, CANCELED
     
@@ -99,11 +121,11 @@ class SequenceRule(Base, TenantMixin):
     
     # Limits & Intervals
     max_linkedin_msgs: Mapped[int] = mapped_column(Integer, default=3)
-    linkedin_interval_days: Mapped[int] = mapped_column(Integer, default=2)
+    linkedin_interval_minutes: Mapped[int] = mapped_column(Integer, default=60)
     max_emails: Mapped[int] = mapped_column(Integer, default=4)
-    email_interval_days: Mapped[int] = mapped_column(Integer, default=3)
+    email_interval_minutes: Mapped[int] = mapped_column(Integer, default=60)
     max_calls: Mapped[int] = mapped_column(Integer, default=2)
-    call_interval_days: Mapped[int] = mapped_column(Integer, default=4)
+    call_interval_minutes: Mapped[int] = mapped_column(Integer, default=1440)
     
     # Rules Panel Configs
     response_handling_action: Mapped[str] = mapped_column(String(50), default="PAUSE_AND_NOTIFY") # PAUSE_AND_NOTIFY, CONTINUE
@@ -119,5 +141,5 @@ class SequenceStep(Base):
     channel: Mapped[str] = mapped_column(String(20)) # LINKEDIN, EMAIL, CALL
     step_number: Mapped[int] = mapped_column(Integer)
     title: Mapped[str] = mapped_column(String(100)) # e.g. "Message 1 (AI-crafted connect)"
-    delay_days: Mapped[int] = mapped_column(Integer, default=2)
+    delay_minutes: Mapped[int] = mapped_column(Integer, default=60)
     template_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

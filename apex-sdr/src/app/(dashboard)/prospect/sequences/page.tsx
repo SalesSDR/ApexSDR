@@ -4,11 +4,12 @@ import { useState } from "react";
 import useSWR from "swr";
 import { motion, AnimatePresence } from "framer-motion";
 import { Sparkles, Download, Upload, Grid, List, Layout, Plus, MessageSquare, Mail, Phone, Settings, AlertCircle, ChevronDown } from "lucide-react";
+import { API_BASE_URL } from "@/lib/config";
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
 export default function SequencesPage() {
-  const { data, error, mutate } = useSWR("http://localhost:8000/api/v1/sequences/current", fetcher);
+  const { data, error, mutate } = useSWR(`${API_BASE_URL}/sequences/current`, fetcher);
 
   const [saving, setSaving] = useState(false);
 
@@ -38,7 +39,7 @@ export default function SequencesPage() {
     mutate({ rule: updatedRule, steps }, false);
     
     try {
-      await fetch("http://localhost:8000/api/v1/sequences/rules", {
+      await fetch(`${API_BASE_URL}/sequences/rules`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(updatedRule)
@@ -105,7 +106,7 @@ export default function SequencesPage() {
                   value={rules.max_linkedin_msgs}
                   onChange={(e) => handleRuleChange("max_linkedin_msgs", parseInt(e.target.value))}
                 >
-                  {[1,2,3,4,5].map(d => <option key={d} value={d} className="bg-neutral-900">{d}</option>)}
+                  {[0,1,2,3,4,5].map(d => <option key={d} value={d} className="bg-neutral-900">{d}</option>)}
                 </select>
               </div>
             </div>

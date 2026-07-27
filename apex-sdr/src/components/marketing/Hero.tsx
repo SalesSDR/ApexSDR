@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { ArrowRight, Bot, Target, Zap } from "lucide-react";
+import { APP_URL } from "@/lib/config";
 
 export function Hero() {
   return (
@@ -46,10 +47,10 @@ export function Hero() {
           className="mt-10 flex flex-col sm:flex-row items-center gap-4"
         >
           <Link
-            href="/prospect/active-queue"
+            href="/demo"
             className="flex items-center gap-2 px-8 py-4 rounded-full bg-[#E5D5C5] text-black font-bold text-lg hover:bg-white transition-colors"
           >
-            Launch SDR Agent <ArrowRight size={20} />
+            Book a Live Demo <ArrowRight size={20} />
           </Link>
           <Link
             href="/products/apex-sdr"

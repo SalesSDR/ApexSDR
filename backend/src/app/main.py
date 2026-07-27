@@ -8,6 +8,9 @@ from app.api.v1.webhooks import router as webhooks_router
 from app.api.v1.n8n_webhooks import router as n8n_router
 from app.api.v1.icp import router as icp_router
 from app.api.v1.sequences import router as sequences_router
+from app.api.v1.apollo import router as apollo_router
+from app.api.v1.twilio_webhooks import router as twilio_router
+from app.api.v1.analytics import router as analytics_router
 from app.database import engine
 from app.models.base import Base
 
@@ -52,4 +55,7 @@ app.include_router(campaigns_router, prefix="/api/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
 app.include_router(icp_router, prefix="/api/v1")
 app.include_router(sequences_router, prefix="/api/v1")
+app.include_router(apollo_router, prefix="/api/v1")
 app.include_router(n8n_router, prefix="/api/v1/webhooks")
+app.include_router(twilio_router, prefix="/api/v1/webhooks")
+app.include_router(analytics_router, prefix="/api/v1")

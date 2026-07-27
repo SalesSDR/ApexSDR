@@ -8,12 +8,10 @@ from app.database import AsyncSessionLocal, redis_client
 from app.services.unipile import UnipileClient
 from app.services.apollo import ApolloClient
 from app.services.twilio import TwilioClient
-from app.workers.tasks import (
     start_outbound_sequence,
-    execute_initial_message_task,
-    execute_follow_up_task,
+    send_linkedin_followup_task,
+    execute_email_dispatch_task,
     execute_call_task,
-    check_linkedin_acceptance_task,
     autonomous_pipeline_supervisor_task
 )
 
@@ -70,17 +68,15 @@ class WorkerSettings:
     """
     functions = [
         start_outbound_sequence,
-        execute_initial_message_task,
-        execute_follow_up_task,
+        send_linkedin_followup_task,
+        execute_email_dispatch_task,
         execute_call_task,
-        check_linkedin_acceptance_task,
         autonomous_pipeline_supervisor_task
     ]
     # Poll Unipile invitations queue every minute (second=0)
-    # Poll Autonomous Supervisor every 5 minutes (minute=5)
+    # Poll Autonomous Supervisor every minute for testing (change to minute=set(range(0, 60, 5)) for production)
     cron_jobs = [
-        cron(check_linkedin_acceptance_task, second=0),
-        cron(autonomous_pipeline_supervisor_task, minute=set(range(0, 60, 5)))
+        cron(autonomous_pipeline_supervisor_task, second=0)
     ]
     redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)
     on_startup = on_startup

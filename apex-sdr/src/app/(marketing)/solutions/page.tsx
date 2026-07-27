@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { ArrowRight, Target, Inbox, RotateCcw, Calendar, Users, TrendingUp, Zap, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { APP_URL } from "@/lib/config";
 
 const useCases = [
   {
@@ -257,10 +258,10 @@ export default function SolutionsPage() {
             Transform Your Outbound Pipeline Now
           </h2>
           <Link 
-            href="/prospect/active-queue" 
+            href="/demo"
             className="flex items-center justify-center gap-2 bg-[#E5D5C5] text-black px-10 py-5 rounded-full font-bold text-xl hover:bg-white transition-all shadow-[0_0_40px_rgba(229,213,197,0.3)] hover:shadow-[0_0_60px_rgba(255,255,255,0.4)]"
           >
-            Launch SDR App <ArrowRight size={20} />
+            Book a Live Demo <ArrowRight size={20} />
           </Link>
         </div>
       </section>

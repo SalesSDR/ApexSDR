@@ -13,18 +13,27 @@ logger = logging.getLogger(__name__)
 
 # State transitions map: Source State -> Allowed Destination States
 ALLOWED_TRANSITIONS = {
-    "PROSPECT_CREATED": ["LINKEDIN_REQ_SENT", "PENDING_ACCEPTANCE", "CLOSED"],
+    "PROSPECT_CREATED": ["LINKEDIN_REQ_SENT", "PENDING_ACCEPTANCE", "EMAIL_QUEUED", "CLOSED"],
     "LINKEDIN_REQ_SENT": ["PENDING_ACCEPTANCE", "CONNECTION_ACCEPTED", "CLOSED"],
-    "PENDING_ACCEPTANCE": ["CONNECTION_ACCEPTED", "CLOSED"],
-    "CONNECTION_ACCEPTED": ["INITIAL_MSG_SENT", "CLOSED"],
+    "PENDING_ACCEPTANCE": ["CONNECTION_ACCEPTED", "EMAIL_QUEUED", "PAUSED_RATE_LIMITED", "FAILED_INVALID_PROFILE", "PAUSED_ERROR", "CLOSED"],
+    "PAUSED_RATE_LIMITED": ["PENDING_ACCEPTANCE", "EMAIL_QUEUED", "CLOSED"],
+    "FAILED_INVALID_PROFILE": ["EMAIL_QUEUED", "CLOSED"],
+    "PAUSED_ERROR": ["PENDING_ACCEPTANCE", "EMAIL_QUEUED", "CLOSED"],
+    "CONNECTION_ACCEPTED": ["INITIAL_MSG_SENT", "LINKEDIN_SENT", "CLOSED"],
     "INITIAL_MSG_SENT": ["WAITING_FOR_REPLY", "CLOSED"],
-    "WAITING_FOR_REPLY": ["FOLLOW_UP_SCHEDULED", "CONVERSATION_ACTIVE", "CLOSED"],
-    "FOLLOW_UP_SCHEDULED": ["FOLLOW_UP_SENT", "CONVERSATION_ACTIVE", "CLOSED"],
-    "FOLLOW_UP_SENT": ["CALL_SCHEDULED", "WAITING_FOR_REPLY", "CONVERSATION_ACTIVE", "CLOSED"],
-    "CALL_SCHEDULED": ["CALL_COMPLETED", "CONVERSATION_ACTIVE", "CLOSED"],
+    "LINKEDIN_SENT": ["FOLLOW_UP_SCHEDULED", "LINKEDIN_SENT", "EMAIL_SENT", "WAITING_FOR_REPLY", "CONVERSATION_ACTIVE", "CALL_QUEUED", "CLOSED"],
+    "EMAIL_SENT": ["FOLLOW_UP_SCHEDULED", "LINKEDIN_SENT", "EMAIL_SENT", "WAITING_FOR_REPLY", "CONVERSATION_ACTIVE", "CALL_QUEUED", "CLOSED"],
+    "WAITING_FOR_REPLY": ["FOLLOW_UP_SCHEDULED", "CONVERSATION_ACTIVE", "CALL_QUEUED", "CLOSED"],
+    "FOLLOW_UP_SCHEDULED": ["FOLLOW_UP_SENT", "LINKEDIN_SENT", "EMAIL_SENT", "CONVERSATION_ACTIVE", "CALL_QUEUED", "CLOSED"],
+    "FOLLOW_UP_SENT": ["CALL_SCHEDULED", "WAITING_FOR_REPLY", "CONVERSATION_ACTIVE", "CALL_QUEUED", "CLOSED"],
+    "CALL_SCHEDULED": ["CALL_QUEUED", "IN_CALL", "CALL_COMPLETED", "CONVERSATION_ACTIVE", "CLOSED"],
+    "CALL_QUEUED": ["CALL_QUEUED", "IN_CALL", "CALL_COMPLETED", "CONVERSATION_ACTIVE", "CLOSED"],
+    "IN_CALL": ["CALL_COMPLETED", "CONVERSATION_ACTIVE", "CLOSED"],
     "CALL_COMPLETED": ["CLOSED", "CONVERSATION_ACTIVE"],
-    "CONVERSATION_ACTIVE": ["CLOSED"],
-    "CLOSED": []  # Terminal state
+    "CONVERSATION_ACTIVE": ["CALL_QUEUED", "CLOSED"],
+    "CLOSED": [],  # Terminal state
+    "EMAIL_QUEUED": ["EMAIL_SENT", "EMAIL_FAILED", "CLOSED"],
+    "EMAIL_FAILED": ["CLOSED"]
 }
 
 class StateMachineError(Exception):
@@ -119,75 +128,77 @@ class StateMachine:
                 wf_state = w_res.scalar_one()
                 return prospect, wf_state
 
-        # Fetch entities
-        p_res = await db.execute(select(Prospect).where(Prospect.id == prospect_id))
-        prospect = p_res.scalar_one_or_none()
-        if not prospect:
-            raise StateMachineError(f"Prospect with ID {prospect_id} not found.")
+        # Use explicit atomic database ledger
+        async with db.begin_nested() if db.in_transaction() else db.begin():
+            # Fetch entities
+            p_res = await db.execute(select(Prospect).where(Prospect.id == prospect_id))
+            prospect = p_res.scalar_one_or_none()
+            if not prospect:
+                raise StateMachineError(f"Prospect with ID {prospect_id} not found.")
 
-        w_res = await db.execute(select(WorkflowState).where(WorkflowState.prospect_id == prospect_id))
-        wf_state = w_res.scalar_one_or_none()
-        if not wf_state:
-            wf_state = WorkflowState(
+            w_res = await db.execute(select(WorkflowState).where(WorkflowState.prospect_id == prospect_id))
+            wf_state = w_res.scalar_one_or_none()
+            if not wf_state:
+                wf_state = WorkflowState(
+                    id=str(uuid.uuid4()),
+                    prospect_id=prospect.id,
+                    tenant_id=prospect.tenant_id,
+                    state=prospect.current_state,
+                    payload={}
+                )
+                db.add(wf_state)
+
+            # 2. Database level idempotency guard: check in payload
+            if idempotency_token and wf_state.payload.get("processed_tokens", {}).get(idempotency_token):
+                logger.warning(f"Duplicate task execution blocked by DB payload check: {idempotency_token}")
+                return prospect, wf_state
+
+            # Validate transition path (Any state is allowed to shift to CLOSED or CONVERSATION_ACTIVE)
+            current = prospect.current_state
+            if current != new_state and not force:
+                allowed = ALLOWED_TRANSITIONS.get(current, [])
+                if new_state not in allowed and new_state not in ["CLOSED", "CONVERSATION_ACTIVE"]:
+                    raise StateMachineError(f"Illegal state transition from {current} to {new_state}.")
+
+            # Shift states
+            prospect.current_state = new_state
+            wf_state.state = new_state
+
+            # Merge payload updates
+            if not wf_state.payload:
+                wf_state.payload = {}
+            if payload_updates:
+                wf_state.payload.update(payload_updates)
+
+            # Record idempotency token in the DB payload
+            if idempotency_token:
+                if "processed_tokens" not in wf_state.payload:
+                    wf_state.payload["processed_tokens"] = {}
+                wf_state.payload["processed_tokens"][idempotency_token] = datetime.utcnow().isoformat()
+
+            # Log to ActivityTimeline
+            timeline_event = ActivityTimeline(
                 id=str(uuid.uuid4()),
-                prospect_id=prospect.id,
                 tenant_id=prospect.tenant_id,
-                state=prospect.current_state,
-                payload={}
+                prospect_id=prospect.id,
+                channel=StateMachine._get_channel_for_state(new_state),
+                event_type=StateMachine._get_event_type_for_trigger(event_trigger),
+                description=f"State transitioned from {current} to {new_state}. Trigger: {event_trigger}"
             )
-            db.add(wf_state)
+            db.add(timeline_event)
 
-        # 2. Database level idempotency guard: check in payload
-        if idempotency_token and wf_state.payload.get("processed_tokens", {}).get(idempotency_token):
-            logger.warning(f"Duplicate task execution blocked by DB payload check: {idempotency_token}")
+            # Side effects
+            if new_state in ["CONVERSATION_ACTIVE", "CLOSED"]:
+                # Cancel all downstream pending FollowUp entities
+                await db.execute(
+                    update(FollowUp)
+                    .where(FollowUp.prospect_id == prospect_id, FollowUp.status == "PENDING")
+                    .values(status="CANCELED")
+                )
+                logger.info(f"Cancelled downstream pending follow-ups for prospect {prospect_id} due to state {new_state}")
+
+            await db.flush()
             return prospect, wf_state
-
-        # Validate transition path (Any state is allowed to shift to CLOSED or CONVERSATION_ACTIVE)
-        current = prospect.current_state
-        if current != new_state and not force:
-            allowed = ALLOWED_TRANSITIONS.get(current, [])
-            if new_state not in allowed and new_state not in ["CLOSED", "CONVERSATION_ACTIVE"]:
-                raise StateMachineError(f"Illegal state transition from {current} to {new_state}.")
-
-        # Shift states
-        prospect.current_state = new_state
-        wf_state.state = new_state
-
-        # Merge payload updates
-        if not wf_state.payload:
-            wf_state.payload = {}
-        if payload_updates:
-            wf_state.payload.update(payload_updates)
-
-        # Record idempotency token in the DB payload
-        if idempotency_token:
-            if "processed_tokens" not in wf_state.payload:
-                wf_state.payload["processed_tokens"] = {}
-            wf_state.payload["processed_tokens"][idempotency_token] = datetime.utcnow().isoformat()
-
-        # Log to ActivityTimeline
-        timeline_event = ActivityTimeline(
-            id=str(uuid.uuid4()),
-            tenant_id=prospect.tenant_id,
-            prospect_id=prospect.id,
-            channel=StateMachine._get_channel_for_state(new_state),
-            event_type=StateMachine._get_event_type_for_trigger(event_trigger),
-            description=f"State transitioned from {current} to {new_state}. Trigger: {event_trigger}"
-        )
-        db.add(timeline_event)
-
-        # Side effects
-        if new_state in ["CONVERSATION_ACTIVE", "CLOSED"]:
-            # Cancel all downstream pending FollowUp entities
-            await db.execute(
-                update(FollowUp)
-                .where(FollowUp.prospect_id == prospect_id, FollowUp.status == "PENDING")
-                .values(status="CANCELED")
-            )
-            logger.info(f"Cancelled downstream pending follow-ups for prospect {prospect_id} due to state {new_state}")
-
-        await db.flush()
-        return prospect, wf_state
 
     @staticmethod
     def _get_channel_for_state(state: str) -> str:

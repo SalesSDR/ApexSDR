@@ -22,10 +22,19 @@ function mapBackendStateToFrontend(state: string): { linkedInStage: LinkedInStag
     case "INITIAL_MSG_SENT":
     case "WAITING_FOR_REPLY":
       return { linkedInStage: "Follow Up Msg", emailStage: "Not Sent", callStage: "Not Called" };
+    case "EMAIL_QUEUED":
+      return { linkedInStage: "Not Connected", emailStage: "Not Sent", callStage: "Not Called" };
+    case "EMAIL_SENT":
+      return { linkedInStage: "Not Connected", emailStage: "Email Sent", callStage: "Not Called" };
+    case "EMAIL_FAILED":
+      return { linkedInStage: "Not Connected", emailStage: "Undelivered", callStage: "Not Called" };
     case "FOLLOW_UP_SCHEDULED":
     case "FOLLOW_UP_SENT":
       return { linkedInStage: "Follow Up Msg", emailStage: "Email Sent", callStage: "Not Called" };
+    case "CALL_QUEUED":
+    case "IN_CALL":
     case "CALL_SCHEDULED":
+      return { linkedInStage: "Follow Up Msg", emailStage: "Email Sent", callStage: "Scheduled" };
     case "CALL_COMPLETED":
       return { linkedInStage: "Follow Up Msg", emailStage: "Email Sent", callStage: "Answered" };
     case "CONVERSATION_ACTIVE":

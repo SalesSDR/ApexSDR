@@ -28,10 +28,10 @@ export default function ApexSDRProductPage() {
           </div>
 
           <Link
-            href="/prospect/active-queue"
+            href="/demo"
             className="inline-flex items-center gap-2 px-8 py-4 rounded-full bg-[#E5D5C5] text-black font-bold text-lg hover:bg-white transition-colors"
           >
-            Launch SDR Workspace <ArrowRight size={20} />
+            Book a Live Demo <ArrowRight size={20} />
           </Link>
         </div>
 

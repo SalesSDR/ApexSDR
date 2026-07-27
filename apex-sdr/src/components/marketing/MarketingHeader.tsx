@@ -3,7 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import { Menu, X, ArrowRight, Sparkles } from "lucide-react";
+import { Menu, X, ArrowRight } from "lucide-react";
+import { APP_URL } from "@/lib/config";
 
 export function MarketingHeader() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -48,12 +49,20 @@ export function MarketingHeader() {
           </nav>
 
           {/* CTA & Mobile Toggle */}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            <a
+              href={APP_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hidden md:flex items-center justify-center rounded-full border border-white/15 text-white px-5 py-2 text-sm font-semibold hover:bg-white/10 transition-colors"
+            >
+              Launch App
+            </a>
             <Link
               href="/demo"
-              className="hidden md:flex items-center justify-center rounded-full bg-white text-black px-5 py-2 text-sm font-semibold hover:bg-gray-200 transition-colors"
+              className="hidden md:flex items-center gap-1.5 justify-center rounded-full bg-[#E5D5C5] text-black px-5 py-2 text-sm font-semibold hover:bg-white transition-colors"
             >
-              Get a Live Demo
+              Book a Live Demo <ArrowRight size={14} />
             </Link>
             <button
               className="md:hidden text-white p-2"
@@ -96,10 +105,19 @@ export function MarketingHeader() {
                 <Link
                   href="/demo"
                   onClick={() => setMobileMenuOpen(false)}
-                  className="flex items-center justify-center rounded-full bg-white text-black px-6 py-4 text-lg font-semibold hover:bg-gray-200 transition-colors"
+                  className="flex items-center justify-center gap-2 rounded-full bg-[#E5D5C5] text-black px-6 py-4 text-lg font-semibold hover:bg-white transition-colors"
                 >
-                  Get a Live Demo
+                  Book a Live Demo <ArrowRight size={20} />
                 </Link>
+                <a
+                  href={APP_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="flex items-center justify-center rounded-full border border-white/15 text-white px-6 py-4 text-lg font-semibold hover:bg-white/10 transition-colors"
+                >
+                  Launch App
+                </a>
               </div>
             </nav>
           </motion.div>

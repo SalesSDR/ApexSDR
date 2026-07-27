@@ -1,0 +1,56 @@
+{
+  "name": "Unipile Acceptance Bridge",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "unipile-connection-accepted",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "e44c207a-d021-4f3b-81ea-7cbfecc96f7e",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "9d1b6cf1-5dcb-4db4-a95e-18be320cccd2"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/api/v1/webhooks/n8n/connection-accepted",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"prospect_id\": \"{{ $json.body.prospect_id }}\",\n  \"provider_id\": \"{{ $json.body.provider_id }}\",\n  \"event\": \"{{ $json.body.event }}\"\n}",
+        "options": {}
+      },
+      "id": "0d6194b1-88fc-430c-abeb-a6b1625f4639",
+      "name": "Forward to ApexSDR Backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        420,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Forward to ApexSDR Backend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
