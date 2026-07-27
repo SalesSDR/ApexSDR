@@ -1,23 +1,33 @@
-FROM python:3.13-slim
+# Use python image and copy uv binary to it
+FROM python:3.11-slim AS uv_installer
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH=/app/src
+WORKDIR /app
+COPY pyproject.toml .
+# Compile bytecode and create virtual environment
+ENV VIRTUAL_ENV=/opt/venv
+RUN uv venv /opt/venv && uv pip install -r pyproject.toml
+
+# Clean execution container
+FROM python:3.11-slim as runner
 
 WORKDIR /app
 
-# Install system dependencies (needed for compiling some python packages like psycopg2)
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/src
+
+# Install necessary runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the requirements file and install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy virtual environment
+COPY --from=uv_installer /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy the rest of the application code
+# Copy source code
 COPY . .
 
 # We do not define a CMD here. 
-# The startup command is dynamically passed by Render (web API vs ARQ worker).
+# The startup command is dynamically passed by Render via dockerCommand.
