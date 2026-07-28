@@ -2,7 +2,7 @@ import json
 import uuid
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,18 +32,18 @@ async def create_prospect(
     Registers a new prospect under the caller's tenant boundary.
     Checks for duplicate active workflows and enqueues automated sequence initialization.
     """
-    # Check if there's already an active prospect with this email in the tenant's organization
-    query = select(Prospect).where(
-        Prospect.tenant_id == tenant_id,
-        Prospect.email == payload.email,
-        Prospect.current_state != "CLOSED"
-    )
-    existing = await db.execute(query)
-    if existing.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"An active prospect with the email '{payload.email}' already exists inside this workspace."
-        )
+    # For dev testing, we allow adding the same email multiple times.
+    # query = select(Prospect).where(
+    #     Prospect.tenant_id == tenant_id,
+    #     Prospect.email == payload.email,
+    #     Prospect.current_state != "CLOSED"
+    # )
+    # existing = await db.execute(query)
+    # if existing.scalar_one_or_none():
+    #     raise HTTPException(
+    #         status_code=status.HTTP_409_CONFLICT,
+    #         detail=f"An active prospect with the email '{payload.email}' already exists inside this workspace."
+    #     )
 
     # 1. Instantiate Prospect record
     prospect_id = str(uuid.uuid4())
@@ -56,7 +56,8 @@ async def create_prospect(
         email=payload.email,
         linkedin_url=str(payload.linkedin_url),
         phone_number=payload.phone_number,
-        current_state="PENDING_ACCEPTANCE"
+        current_state="PENDING_ACCEPTANCE",
+        next_action_at=datetime.now(timezone.utc)
     )
     db.add(prospect)
 
@@ -113,9 +114,10 @@ async def create_prospect(
     return {
         "status": "success",
         "data": {
-            "id": prospect.id,
-            "current_state": prospect.current_state,
-            "tenant_id": prospect.tenant_id
+            "id": prospect_id,
+            "current_state": "PENDING_ACCEPTANCE",
+            "status": prospect.status,
+            "tenant_id": tenant_id
         }
     }
 
@@ -152,6 +154,7 @@ async def import_from_unipile(
     
     imported_count = 0
     skipped_count = 0
+    imported_prospect_ids = []
 
     for profile in payload.profiles:
         # Check duplicate by provider_id
@@ -171,12 +174,13 @@ async def import_from_unipile(
             campaign_id=payload.campaign_id,
             first_name=profile.first_name,
             last_name=profile.last_name,
-            email=profile.email or f"placeholder_{prospect_id}@example.com",
+            email=profile.email,
             linkedin_url=profile.linkedin_url or "",
             phone_number=None,
             company_name=profile.organization_name,
+            company_domain=profile.company_domain,
             provider_id=profile.provider_id,
-            current_state=profile.title or "Unipile Import",
+            current_state=(profile.title[:50] if profile.title else "Unipile Import"),
             status=ProspectStatus.IDLE,
             call_attempts=0,
             next_action_at=datetime.utcnow()
@@ -203,8 +207,19 @@ async def import_from_unipile(
         db.add(timeline)
         
         imported_count += 1
+        imported_prospect_ids.append(prospect_id)
         
     await db.commit()
+
+    if imported_prospect_ids:
+        arq_pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
+        try:
+            for pid in imported_prospect_ids:
+                await arq_pool.enqueue_job("run_waterfall_enrichment_task", pid)
+        except Exception as e:
+            logger.error(f"Failed to enqueue enrichment tasks: {str(e)}")
+        finally:
+            await arq_pool.close()
 
     return {
         "status": "success",
@@ -304,6 +319,55 @@ async def bulk_action(
                     await arq_pool.close()
     await db.commit()
     return {"status": "success", "message": f"Applied {payload.action} to {len(payload.prospect_ids)} prospects"}
+
+from pydantic import BaseModel
+from jose import jwt, JWTError
+
+class EngagementEvent(BaseModel):
+    event: str
+
+@router.post("/engaged", status_code=status.HTTP_200_OK)
+async def prospect_engaged(
+    payload: EngagementEvent,
+    token: str = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Called by the frontend landing site when a prospect interacts with the chatbot or CTA.
+    """
+    if payload.event not in ["CHATBOT_INTERACTION", "CTA_CLICK"]:
+        return {"status": "ignored", "reason": "invalid_event"}
+        
+    if not token:
+        raise HTTPException(status_code=403, detail="Missing auth token")
+        
+    try:
+        decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+        prospect_id = decoded.get("prospect_id")
+    except JWTError:
+        raise HTTPException(status_code=403, detail="Invalid token")
+        
+    if not prospect_id:
+        raise HTTPException(status_code=400, detail="Invalid payload")
+        
+    async with db.begin():
+        query = select(Prospect).where(Prospect.id == prospect_id).with_for_update()
+        res = await db.execute(query)
+        prospect = res.scalar_one_or_none()
+        
+        if not prospect:
+            raise HTTPException(status_code=404, detail="Prospect not found")
+            
+        if prospect.status in [ProspectStatus.MEETING_BOOKED, ProspectStatus.CALL_IN_PROGRESS, ProspectStatus.UNRESPONSIVE_DEAD, ProspectStatus.COMPLETED_DECLINED]:
+            logger.info(f"Prospect {prospect_id} interacted on website but is in terminal state ({prospect.status.value}). Ignoring.")
+            return {"status": "ignored", "reason": "terminal_state"}
+            
+        prospect.status = ProspectStatus.ENGAGED_ON_WEBSITE
+        prospect.next_action_at = None
+        
+        logger.info(f"Prospect {prospect_id} engaged on website via {payload.event}. Outbound sequences halted.")
+        
+    return {"status": "success", "message": "Pipeline halted, prospect is engaged"}
 
 @router.post("/{prospect_id}/advance", status_code=status.HTTP_200_OK)
 async def advance_prospect(

@@ -19,6 +19,7 @@ interface PreviewLead {
   last_name: string;
   title: string;
   company: string;
+  company_domain?: string;
   linkedin_url: string;
   email: string;
 }
@@ -102,7 +103,8 @@ export default function DefineICPPage() {
         last_name: l.last_name,
         title: l.title,
         organization_name: l.company,
-        email: l.email || `placeholder_${l.id}@example.com`,
+        company_domain: l.company_domain,
+        email: l.email,
         linkedin_url: l.linkedin_url
       }));
 

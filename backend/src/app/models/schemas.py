@@ -33,6 +33,10 @@ class ProspectStatus(enum.Enum):
     PAUSED_NUDGED = "PAUSED_NUDGED"
     COMPLETED_DECLINED = "COMPLETED_DECLINED"
     UNRESPONSIVE_DEAD = "UNRESPONSIVE_DEAD"
+    ERROR_NEEDS_HUMAN = "ERROR_NEEDS_HUMAN"
+    ENGAGED_ON_WEBSITE = "ENGAGED_ON_WEBSITE"
+    CALL_NO_ANSWER_1 = "CALL_NO_ANSWER_1"
+    CALL_NO_ANSWER_2 = "CALL_NO_ANSWER_2"
 
 class Campaign(Base, TenantMixin):
     __tablename__ = "campaigns"
@@ -50,10 +54,11 @@ class Prospect(Base, TenantMixin):
     campaign_id: Mapped[Optional[str]] = mapped_column(ForeignKey("campaigns.id", ondelete="SET NULL"), nullable=True)
     first_name: Mapped[str] = mapped_column(String(100), nullable=False)
     last_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    email: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    email: Mapped[Optional[str]] = mapped_column(String(255), index=True, nullable=True)
     linkedin_url: Mapped[str] = mapped_column(Text, nullable=False)
     phone_number: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     company_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    company_domain: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     provider_id: Mapped[Optional[str]] = mapped_column(String(100), index=True, nullable=True)
     current_state: Mapped[str] = mapped_column(String(50), default="PROSPECT_CREATED", index=True, nullable=False)
     
@@ -62,6 +67,8 @@ class Prospect(Base, TenantMixin):
     call_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_call_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     next_action_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_status_change_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
     
     # Relationships
     campaign = relationship("Campaign", back_populates="prospects")

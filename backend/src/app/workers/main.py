@@ -8,11 +8,13 @@ from app.database import AsyncSessionLocal, redis_client
 from app.services.unipile import UnipileClient
 from app.services.apollo import ApolloClient
 from app.services.twilio import TwilioClient
+from app.workers.tasks import (
     start_outbound_sequence,
     send_linkedin_followup_task,
     execute_email_dispatch_task,
     execute_call_task,
-    autonomous_pipeline_supervisor_task
+    autonomous_pipeline_supervisor_task,
+    run_waterfall_enrichment_task
 )
 
 logger = logging.getLogger(__name__)
@@ -71,7 +73,8 @@ class WorkerSettings:
         send_linkedin_followup_task,
         execute_email_dispatch_task,
         execute_call_task,
-        autonomous_pipeline_supervisor_task
+        autonomous_pipeline_supervisor_task,
+        run_waterfall_enrichment_task
     ]
     # Poll Unipile invitations queue every minute (second=0)
     # Poll Autonomous Supervisor every minute for testing (change to minute=set(range(0, 60, 5)) for production)

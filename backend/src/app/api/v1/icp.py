@@ -111,12 +111,18 @@ async def preview_icp(request: ICPQuery):
 
                 headline = p.get("headline") or ""
                 
+                company = p.get("company_name", p.get("current_company_name", ""))
+                company_domain = p.get("company_domain", p.get("current_company_domain", ""))
+                if not company and " at " in headline:
+                    company = headline.split(" at ")[-1].strip()
+                
                 preview_leads.append({
                     "id": p.get("id"), # Unipile search returns 'id' directly
                     "first_name": first_name,
                     "last_name": last_name,
                     "title": headline,
-                    "company": "", 
+                    "company": company,
+                    "company_domain": company_domain,
                     "linkedin_url": p.get("public_profile_url", p.get("profile_url", "")),
                     "email": "" 
                 })

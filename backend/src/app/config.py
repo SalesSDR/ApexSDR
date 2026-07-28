@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     TWILIO_FROM_NUMBER: Optional[str] = Field(None, validation_alias="TWILIO_FROM_NUMBER")
     NGROK_DOMAIN: Optional[str] = Field("YOUR_NGROK_DOMAIN", validation_alias="NGROK_DOMAIN")
 
+    # Enrichment API Keys
+    PROSPEO_API_KEY: Optional[str] = Field(None, validation_alias="PROSPEO_API_KEY")
+    KASPR_API_KEY: Optional[str] = Field(None, validation_alias="KASPR_API_KEY")
+    CONTACTOUT_API_KEY: Optional[str] = Field(None, validation_alias="CONTACTOUT_API_KEY")
+
     # Gemini Integration
     GEMINI_API_KEY: Optional[str] = Field(None, validation_alias="GEMINI_API_KEY")
 

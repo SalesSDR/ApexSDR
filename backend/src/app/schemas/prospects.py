@@ -9,9 +9,12 @@ class ProspectCreateSchema(BaseModel):
     phone_number: Optional[str] = Field(None, pattern=r"^\+?[1-9]\d{1,14}$")
     campaign_id: Optional[str] = None
 
+from app.models.schemas import ProspectStatus
+
 class ProspectResponseData(BaseModel):
     id: str
     current_state: str
+    status: ProspectStatus
     tenant_id: str
 
     class Config:
@@ -29,6 +32,7 @@ class ProspectListElement(BaseModel):
     linkedin_url: Optional[str] = None
     phone_number: Optional[str] = None
     current_state: str
+    status: ProspectStatus
     tenant_id: str
 
     class Config:
@@ -51,6 +55,7 @@ class UnipileProfileSchema(BaseModel):
     last_name: str
     title: Optional[str] = None
     organization_name: Optional[str] = None
+    company_domain: Optional[str] = None
     email: Optional[str] = None
     linkedin_url: Optional[str] = None
 
