@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -45,9 +46,19 @@ async def startup_db_initialization():
     Ensures relational schemas exist upon application startup.
     """
     logger.info("Initializing relational database models...")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database schemas creation completed successfully.")
+    retries = 5
+    for attempt in range(retries):
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            logger.info("Database schemas creation completed successfully.")
+            break
+        except Exception as e:
+            logger.warning(f"Database connection attempt {attempt + 1} failed: {e}")
+            if attempt == retries - 1:
+                logger.error("Could not connect to database after maximum retries.")
+                raise
+            await asyncio.sleep(2)
 
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def check_health_status():
