@@ -1,14 +1,26 @@
 import os
 from typing import Optional
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     ENVIRONMENT: str = Field("production", validation_alias="ENVIRONMENT")
+    DATABASE_URL: Optional[str] = Field(None, validation_alias="DATABASE_URL")
     DATABASE_ASYNC_URL: str = Field(
         "postgresql+asyncpg://sdr_admin:SECURE_VAULT_PW@localhost:5432/apex_sdr_prod",
         validation_alias="DATABASE_ASYNC_URL"
     )
+
+    @model_validator(mode='after')
+    def parse_database_url(self) -> 'Settings':
+        if self.DATABASE_URL:
+            url = self.DATABASE_URL
+            if url.startswith("postgres://"):
+                url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+            elif url.startswith("postgresql://"):
+                url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+            self.DATABASE_ASYNC_URL = url
+        return self
     REDIS_URL: str = Field("redis://localhost:6379/0", validation_alias="REDIS_URL")
 
     # Unipile Integration
