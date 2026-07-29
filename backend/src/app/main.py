@@ -73,7 +73,8 @@ async def startup_db_initialization():
         on_shutdown=WorkerSettings.on_shutdown,
         on_job_error=WorkerSettings.on_job_error
     )
-    asyncio.create_task(worker.main())
+    # Save a strong reference to prevent Python's garbage collector from destroying the worker
+    app.state.worker_task = asyncio.create_task(worker.main())
 
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def check_health_status():
