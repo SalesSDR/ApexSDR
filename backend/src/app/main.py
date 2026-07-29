@@ -14,6 +14,8 @@ from app.api.v1.twilio_webhooks import router as twilio_router
 from app.api.v1.analytics import router as analytics_router
 from app.database import engine
 from app.models.base import Base
+from arq.worker import Worker
+from app.workers.main import WorkerSettings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -61,6 +63,17 @@ async def startup_db_initialization():
                 logger.error("Could not connect to database after maximum retries.")
                 raise
             await asyncio.sleep(2)
+            
+    logger.info("Starting embedded background worker for AI Pipeline...")
+    worker = Worker(
+        functions=WorkerSettings.functions,
+        cron_jobs=WorkerSettings.cron_jobs,
+        redis_settings=WorkerSettings.redis_settings,
+        on_startup=WorkerSettings.on_startup,
+        on_shutdown=WorkerSettings.on_shutdown,
+        on_job_error=WorkerSettings.on_job_error
+    )
+    asyncio.create_task(worker.main())
 
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def check_health_status():
