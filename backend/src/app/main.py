@@ -70,8 +70,7 @@ async def startup_db_initialization():
         cron_jobs=WorkerSettings.cron_jobs,
         redis_settings=WorkerSettings.redis_settings,
         on_startup=WorkerSettings.on_startup,
-        on_shutdown=WorkerSettings.on_shutdown,
-        on_job_error=WorkerSettings.on_job_error
+        on_shutdown=WorkerSettings.on_shutdown
     )
     # Save a strong reference to prevent Python's garbage collector from destroying the worker
     app.state.worker_task = asyncio.create_task(worker.main())
