@@ -233,13 +233,16 @@ async def execute_email_dispatch_task(ctx, prospect_id: str):
                 )
             except Exception as e:
                 logger.error(f"Failed to send email to {prospect_id}: {e}")
-                if prospect.retry_count >= 3:
-                    prospect.status = ProspectStatus.ERROR_NEEDS_HUMAN
-                    prospect.next_action_at = None
+                if dev_mode:
+                    logger.info("Dev mode active: Bypassing Email exception to continue sequence...")
                 else:
-                    prospect.retry_count += 1
-                    prospect.next_action_at = datetime.now(timezone.utc) + timedelta(hours=1 * prospect.retry_count)
-                return
+                    if prospect.retry_count >= 3:
+                        prospect.status = ProspectStatus.ERROR_NEEDS_HUMAN
+                        prospect.next_action_at = None
+                    else:
+                        prospect.retry_count += 1
+                        prospect.next_action_at = datetime.now(timezone.utc) + timedelta(hours=1 * prospect.retry_count)
+                    return
 
             prospect.retry_count = 0
             prospect.status = ProspectStatus.EMAIL_SENT
@@ -276,13 +279,16 @@ async def execute_call_task(ctx, prospect_id: str):
                 )
             except Exception as e:
                 logger.error(f"Failed to initiate call for {prospect_id}: {e}")
-                if prospect.retry_count >= 3:
-                    prospect.status = ProspectStatus.ERROR_NEEDS_HUMAN
-                    prospect.next_action_at = None
+                if dev_mode:
+                    logger.info("Dev mode active: Bypassing Call exception to continue sequence...")
                 else:
-                    prospect.retry_count += 1
-                    prospect.next_action_at = datetime.now(timezone.utc) + timedelta(hours=1 * prospect.retry_count)
-                return
+                    if prospect.retry_count >= 3:
+                        prospect.status = ProspectStatus.ERROR_NEEDS_HUMAN
+                        prospect.next_action_at = None
+                    else:
+                        prospect.retry_count += 1
+                        prospect.next_action_at = datetime.now(timezone.utc) + timedelta(hours=1 * prospect.retry_count)
+                    return
 
             prospect.retry_count = 0
             prospect.call_attempts += 1
