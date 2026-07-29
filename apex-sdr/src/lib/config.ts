@@ -13,10 +13,10 @@
  */
 
 export const APP_URL =
-  process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  process.env.NEXT_PUBLIC_APP_URL || "https://apex-sdr-i9xg.vercel.app";
 
-export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000/api/v1";
+// Hardcoded for production to bypass Vercel env variable configuration issues
+export const API_BASE_URL = "https://apex-sdr-api.onrender.com/api/v1";
 
 export const CHAT_WEBHOOK_URL =
   process.env.NEXT_PUBLIC_CHAT_WEBHOOK_URL ||
