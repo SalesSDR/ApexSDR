@@ -26,10 +26,12 @@ app = FastAPI(
 
 import os
 
-allowed_origins_env = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+allowed_origins_env = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,https://apex-sdr-i9xg.vercel.app")
 allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",")]
+# If wildcard is used, some browsers reject allow_credentials=True. 
+# We explicitly allow the vercel app.
 if "*" in allowed_origins:
-    allowed_origins = ["*"]
+    allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "https://apex-sdr-i9xg.vercel.app"]
 
 # Enable CORS for standard frontend calls
 app.add_middleware(
