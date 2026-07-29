@@ -234,7 +234,7 @@ async def execute_email_dispatch_task(ctx, prospect_id: str):
             except Exception as e:
                 logger.error(f"Failed to send email to {prospect_id}: {e}")
                 if dev_mode:
-                    logger.info("Dev mode active: Bypassing Email exception to continue sequence...")
+                    logger.info("Dev mode active: Bypassing Resend email exception to continue sequence...")
                 else:
                     if prospect.retry_count >= 3:
                         prospect.status = ProspectStatus.ERROR_NEEDS_HUMAN
@@ -280,7 +280,7 @@ async def execute_call_task(ctx, prospect_id: str):
             except Exception as e:
                 logger.error(f"Failed to initiate call for {prospect_id}: {e}")
                 if dev_mode:
-                    logger.info("Dev mode active: Bypassing Call exception to continue sequence...")
+                    logger.info("Dev mode active: Bypassing Twilio call exception to continue sequence...")
                 else:
                     if prospect.retry_count >= 3:
                         prospect.status = ProspectStatus.ERROR_NEEDS_HUMAN
