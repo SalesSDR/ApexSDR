@@ -4,7 +4,6 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import {
-  Sparkles,
   ChevronRight,
   Upload,
   Download,
@@ -12,10 +11,7 @@ import {
   LayoutGrid,
   List,
   Table2,
-  ChevronDown,
-  CheckCircle2,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { useUIStore } from "@/lib/store/uiStore";
 import { useState } from "react";
 import { AddProspectModal } from "@/components/prospects/AddProspectModal";
@@ -31,13 +27,18 @@ const BREADCRUMB_MAP: Record<string, { label: string; parent?: string; parentHre
   "/prospect/sequences": { label: "Sequences", parent: "Prospect", parentHref: "/prospect" },
   "/prospect/crm-sync": { label: "CRM Sync", parent: "Prospect", parentHref: "/prospect" },
   "/engage": { label: "Engage" },
+  "/calendar": { label: "Calendar" },
+  "/voice": { label: "Voice" },
+  "/buying-signals": { label: "Buying Signals" },
+  "/decision-logs": { label: "Decision Logs" },
+  "/conversation-memory": { label: "Conversation Memory" },
+  "/compliance": { label: "Compliance" },
   "/admin-settings": { label: "Admin Settings" },
 };
 
 interface HeaderProps {
   showAddProspect?: boolean;
   showUploadDownload?: boolean;
-  showResearchButton?: boolean;
   showViewSwitcher?: boolean;
   totalCount?: string;
   totalCountLabel?: string;
@@ -46,14 +47,12 @@ interface HeaderProps {
 export function Header({
   showAddProspect = true,
   showUploadDownload = false,
-  showResearchButton = false,
   showViewSwitcher = true,
   totalCount,
   totalCountLabel,
 }: HeaderProps) {
   const pathname = usePathname();
   const { viewMode, setViewMode } = useUIStore();
-  const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
 
   const breadcrumb = BREADCRUMB_MAP[pathname];
@@ -89,38 +88,6 @@ export function Header({
 
         {/* Actions */}
         <div className="flex items-center gap-2 flex-shrink-0">
-          {showResearchButton && (
-            <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
-              style={{
-                background: "rgba(59,130,246,0.12)",
-                border: "1px solid rgba(59,130,246,0.25)",
-                color: "var(--apex-accent)",
-              }}
-              id="research-apex-ai-btn"
-            >
-              <Sparkles size={13} className="sparkle-animate" />
-              Research with Apex AI
-            </motion.button>
-          )}
-
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
-            style={{
-              background: "rgba(245,158,11,0.1)",
-              border: "1px solid rgba(245,158,11,0.25)",
-              color: "var(--apex-gold)",
-            }}
-            id="use-apollo-ai-btn"
-          >
-            <Sparkles size={13} />
-            Use Apollo AI
-          </motion.button>
-
           {showAddProspect && (
             <>
               <motion.button
@@ -170,82 +137,6 @@ export function Header({
             </>
           )}
 
-          {/* Onboarding dropdown */}
-          <div className="relative">
-            <button
-              onClick={() => setOnboardingOpen(!onboardingOpen)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all hover:bg-white/5"
-              style={{
-                border: "1px solid var(--apex-border)",
-                color: "var(--apex-text-dim)",
-              }}
-              id="onboarding-status-btn"
-              aria-expanded={onboardingOpen}
-            >
-              <div
-                className="w-4 h-4 rounded-full flex-shrink-0"
-                style={{
-                  background: `conic-gradient(#3b82f6 144deg, rgba(255,255,255,0.15) 144deg)`,
-                }}
-              />
-              <span className="hidden sm:inline whitespace-nowrap">Apex Onboarding</span>
-              <ChevronDown size={12} className={cn("transition-transform", onboardingOpen && "rotate-180")} />
-            </button>
-
-            {onboardingOpen && (
-              <motion.div
-                initial={{ opacity: 0, y: -8, scale: 0.97 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: -8 }}
-                className="absolute right-0 top-full mt-2 w-64 rounded-xl p-4 z-50"
-                style={{
-                  background: "var(--apex-surface-2)",
-                  border: "1px solid var(--apex-border)",
-                  boxShadow: "0 20px 40px rgba(0,0,0,0.4)",
-                }}
-              >
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-sm font-semibold" style={{ color: "var(--apex-text)" }}>
-                    Apex Onboarding
-                  </span>
-                  <span className="text-xs font-medium" style={{ color: "var(--apex-accent)" }}>
-                    40%
-                  </span>
-                </div>
-                <div
-                  className="h-1.5 rounded-full overflow-hidden mb-4"
-                  style={{ background: "rgba(255,255,255,0.08)" }}
-                >
-                  <div
-                    className="h-full rounded-full"
-                    style={{ width: "40%", background: "linear-gradient(90deg, #3b82f6, #60a5fa)" }}
-                  />
-                </div>
-                <div className="space-y-2">
-                  {[
-                    { label: "Connect CRM", done: true },
-                    { label: "Define ICP", done: true },
-                    { label: "Import Prospects", done: false },
-                    { label: "Set Up Sequences", done: false },
-                    { label: "Launch Campaign", done: false },
-                  ].map((step, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                      <CheckCircle2
-                        size={14}
-                        style={{ color: step.done ? "var(--apex-success)" : "var(--apex-text-faint)" }}
-                      />
-                      <span
-                        className="text-xs"
-                        style={{ color: step.done ? "var(--apex-text-dim)" : "var(--apex-text-faint)" }}
-                      >
-                        {step.label}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </motion.div>
-            )}
-          </div>
         </div>
       </div>
 

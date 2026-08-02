@@ -19,8 +19,7 @@ export default function ActiveQueuePage() {
         showViewSwitcher
         showAddProspect
         showUploadDownload
-        showResearchButton={false}
-        totalCount="1,250"
+        totalCount={prospects.length.toLocaleString()}
         totalCountLabel="Active prospects"
       />
 
@@ -34,9 +33,7 @@ export default function ActiveQueuePage() {
         >
           <h2 className="text-sm font-semibold" style={{ color: "var(--apex-text)" }}>
             Active Prospects Queue:{" "}
-            <span style={{ color: "var(--apex-accent)" }}>
-              B2B Marketing VPs (Silicon Valley)
-            </span>
+            <span style={{ color: "var(--apex-accent)" }}>All Prospects</span>
           </h2>
         </div>
 
@@ -48,7 +45,7 @@ export default function ActiveQueuePage() {
             prospects={prospects}
             loading={loading}
             error={error}
-            totalCount={1250}
+            totalCount={prospects.length}
           />
         </div>
       </div>

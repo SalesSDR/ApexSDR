@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 
 export function MarketingFooter() {
@@ -6,7 +7,7 @@ export function MarketingFooter() {
       <div className="max-w-7xl mx-auto px-6 grid grid-cols-1 md:grid-cols-4 gap-12">
         <div className="flex flex-col gap-4">
           <div className="flex items-center gap-3">
-            <img src="/logo.jpg" alt="Apex SDR Logo" className="h-8 w-8 rounded shadow-sm" />
+            <Image src="/logo.jpg" alt="Apex SDR Logo" width={32} height={32} className="h-8 w-8 rounded shadow-sm" />
             <span className="font-bold text-xl tracking-tight text-white">Apex SDR</span>
           </div>
           <p className="text-gray-400 text-sm">

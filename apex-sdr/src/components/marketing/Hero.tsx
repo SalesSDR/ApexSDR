@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { ArrowRight, Bot, Target, Zap } from "lucide-react";
-import { APP_URL } from "@/lib/config";
 
 export function Hero() {
   return (

@@ -10,7 +10,7 @@ import { ICPSidebar } from "@/features/defining-icp/ICPSidebar";
 import { ConversationalICPWidget } from "@/features/defining-icp/ConversationalICPWidget";
 import { ICPWidgetSkeleton } from "@/components/ui/Skeletons";
 import { useGetICPFilters } from "@/hooks/useGetICPFilters";
-import { API_BASE_URL } from "@/lib/config";
+import { fetchApi } from "@/lib/api";
 import { toast } from "sonner";
 
 interface PreviewLead {
@@ -38,14 +38,11 @@ export default function DefineICPPage() {
     
     setFetchingPreview(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/icp/preview`, {
+      const data = await fetchApi("/icp/preview", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt: msg })
       });
-      
-      const data = await response.json();
-      
+
       if (data.status === "success" && data.leads) {
         const aiResponse = { 
           id: (Date.now() + 1).toString(), 
@@ -109,13 +106,11 @@ export default function DefineICPPage() {
       }));
 
     try {
-      const res = await fetch(`${API_BASE_URL}/prospects/import-from-unipile`, {
+      const data = await fetchApi("/prospects/import-from-unipile", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ profiles: profilesToImport })
       });
-      const data = await res.json();
-      
+
       if (data.status === "success") {
         toast.success(`Imported ${data.imported} prospects to pipeline. Skipped ${data.skipped} duplicates.`);
         setSelectedIds(new Set());
@@ -132,7 +127,7 @@ export default function DefineICPPage() {
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-[#0A0A0A] text-white">
-      <Header showResearchButton showViewSwitcher showAddProspect={false} showUploadDownload={false} />
+      <Header showViewSwitcher showAddProspect={false} showUploadDownload={false} />
 
       <div className="flex flex-1 min-h-0 overflow-hidden">
         <ICPSidebar filters={filters} onApplyFilters={handleSendMessage} />

@@ -19,7 +19,6 @@ export default function EngageQueuePage() {
         showViewSwitcher
         showAddProspect
         showUploadDownload
-        showResearchButton={false}
       />
       <div
         className="flex-shrink-0 px-5 py-3"
@@ -31,7 +30,7 @@ export default function EngageQueuePage() {
         </h2>
       </div>
       <div className="flex-1 min-h-0 overflow-hidden" style={{ background: "var(--apex-surface)" }}>
-        <ProspectTable prospects={prospects} loading={loading} error={error} totalCount={847} />
+        <ProspectTable prospects={prospects} loading={loading} error={error} totalCount={prospects.length} />
       </div>
     </div>
   );

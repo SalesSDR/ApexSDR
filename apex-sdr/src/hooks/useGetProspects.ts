@@ -14,7 +14,7 @@ interface UseGetProspectsReturn {
 }
 
 function mapBackendStateToFrontend(state: string): { linkedInStage: LinkedInStage, emailStage: EmailStage, callStage: CallStage } {
-  // If it's a ProspectStatus enum string (e.g. ProspectStatus.IDLE returned as string 'IDLE')
+  // `state` is the backend's ProspectState enum value (Prospect.status).
   switch (state) {
     case "IDLE":
       return { linkedInStage: "Not Connected", emailStage: "Not Sent", callStage: "Not Called" };
@@ -23,47 +23,32 @@ function mapBackendStateToFrontend(state: string): { linkedInStage: LinkedInStag
     case "LI_ACCEPTED_NO_MSG":
       return { linkedInStage: "Request Accepted", emailStage: "Not Sent", callStage: "Not Called" };
     case "LI_MSG_SENT":
+    case "LINKEDIN_NO_RESPONSE":
       return { linkedInStage: "Follow Up Msg", emailStage: "Not Sent", callStage: "Not Called" };
     case "EMAIL_SENT":
+    case "EMAIL_OPENED":
+    case "EMAIL_CLICKED":
       return { linkedInStage: "Follow Up Msg", emailStage: "Email Sent", callStage: "Not Called" };
+    case "EMAIL_FAILED":
+      return { linkedInStage: "Follow Up Msg", emailStage: "Undelivered", callStage: "Not Called" };
     case "CALL_QUEUED":
     case "CALL_IN_PROGRESS":
+    case "CALL_RETRY":
       return { linkedInStage: "Follow Up Msg", emailStage: "Email Sent", callStage: "Scheduled" };
     case "CALL_NO_ANSWER_1":
     case "CALL_NO_ANSWER_2":
       return { linkedInStage: "Follow Up Msg", emailStage: "Email Sent", callStage: "Unanswered" };
+    case "CALL_FAILED":
+      return { linkedInStage: "Follow Up Msg", emailStage: "Email Sent", callStage: "Not Called" };
     case "MEETING_BOOKED":
       return { linkedInStage: "Responded", emailStage: "Responded", callStage: "Answered" };
     case "PAUSED_NUDGED":
     case "COMPLETED_DECLINED":
     case "UNRESPONSIVE_DEAD":
+    case "LOST":
     case "ERROR_NEEDS_HUMAN":
     case "ENGAGED_ON_WEBSITE":
       return { linkedInStage: "Not Connected", emailStage: "Not Sent", callStage: "Not Called" };
-    
-    // Legacy mapping support for old current_state fields
-    case "PROSPECT_CREATED":
-      return { linkedInStage: "Not Connected", emailStage: "Not Sent", callStage: "Not Called" };
-    case "PENDING_ACCEPTANCE":
-      return { linkedInStage: "Request Pending", emailStage: "Not Sent", callStage: "Not Called" };
-    case "CONNECTION_ACCEPTED":
-      return { linkedInStage: "Request Accepted", emailStage: "Not Sent", callStage: "Not Called" };
-    case "INITIAL_MSG_SENT":
-    case "WAITING_FOR_REPLY":
-      return { linkedInStage: "Follow Up Msg", emailStage: "Not Sent", callStage: "Not Called" };
-    case "EMAIL_QUEUED":
-      return { linkedInStage: "Not Connected", emailStage: "Not Sent", callStage: "Not Called" };
-    case "EMAIL_FAILED":
-      return { linkedInStage: "Not Connected", emailStage: "Undelivered", callStage: "Not Called" };
-    case "FOLLOW_UP_SCHEDULED":
-    case "FOLLOW_UP_SENT":
-      return { linkedInStage: "Follow Up Msg", emailStage: "Email Sent", callStage: "Not Called" };
-    case "CALL_COMPLETED":
-      return { linkedInStage: "Follow Up Msg", emailStage: "Email Sent", callStage: "Answered" };
-    case "CONVERSATION_ACTIVE":
-    case "REPLIED":
-    case "CLOSED":
-      return { linkedInStage: "Responded", emailStage: "Responded", callStage: "Responded" };
     default:
       return { linkedInStage: "Not Connected", emailStage: "Not Sent", callStage: "Not Called" };
   }
@@ -81,7 +66,7 @@ export function useGetProspects(): UseGetProspectsReturn {
       const response = await fetchApi("/prospects");
       if (response.status === "success") {
         const mappedData: Prospect[] = response.data.map((p: any) => {
-          const stages = mapBackendStateToFrontend(p.status || p.current_state);
+          const stages = mapBackendStateToFrontend(p.status);
           return {
             id: p.id,
             firstName: p.first_name,

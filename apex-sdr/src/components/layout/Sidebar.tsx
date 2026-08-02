@@ -22,6 +22,13 @@ import {
   Zap,
   PanelLeftClose,
   PanelLeftOpen,
+  CalendarClock,
+  PhoneCall,
+  Radar,
+  ScrollText,
+  BrainCircuit,
+  ShieldCheck,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -106,6 +113,49 @@ const navSections: NavSection[] = [
     href: "/engage",
   },
   {
+    id: "intelligence",
+    label: "Intelligence",
+    icon: <Sparkles size={18} />,
+    subItems: [
+      {
+        id: "calendar",
+        label: "Calendar",
+        href: "/calendar",
+        icon: <CalendarClock size={14} />,
+      },
+      {
+        id: "voice",
+        label: "Voice",
+        href: "/voice",
+        icon: <PhoneCall size={14} />,
+      },
+      {
+        id: "buying-signals",
+        label: "Buying Signals",
+        href: "/buying-signals",
+        icon: <Radar size={14} />,
+      },
+      {
+        id: "decision-logs",
+        label: "Decision Logs",
+        href: "/decision-logs",
+        icon: <ScrollText size={14} />,
+      },
+      {
+        id: "conversation-memory",
+        label: "Conversation Memory",
+        href: "/conversation-memory",
+        icon: <BrainCircuit size={14} />,
+      },
+      {
+        id: "compliance",
+        label: "Compliance",
+        href: "/compliance",
+        icon: <ShieldCheck size={14} />,
+      },
+    ],
+  },
+  {
     id: "admin-settings",
     label: "Admin Settings",
     icon: <Settings size={18} />,
@@ -160,6 +210,16 @@ export function Sidebar() {
     if (pathname.startsWith("/prospect")) {
       setExpandedSections((prev) =>
         prev.includes("prospect") ? prev : [...prev, "prospect"]
+      );
+    }
+  }, [pathname]);
+
+  // Auto-expand "intelligence" section if on one of its pages
+  const INTELLIGENCE_ROUTES = ["/calendar", "/voice", "/buying-signals", "/decision-logs", "/conversation-memory", "/compliance"];
+  useEffect(() => {
+    if (INTELLIGENCE_ROUTES.some((r) => pathname.startsWith(r))) {
+      setExpandedSections((prev) =>
+        prev.includes("intelligence") ? prev : [...prev, "intelligence"]
       );
     }
   }, [pathname]);

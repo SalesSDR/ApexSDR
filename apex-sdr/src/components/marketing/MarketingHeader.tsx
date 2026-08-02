@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { Menu, X, ArrowRight } from "lucide-react";
@@ -31,7 +32,7 @@ export function MarketingHeader() {
           
           {/* Logo */}
           <Link href="/" className="flex items-center gap-3">
-            <img src="/logo.jpg" alt="Apex SDR Logo" className="h-10 w-10 rounded-lg shadow-lg" />
+            <Image src="/logo.jpg" alt="Apex SDR Logo" width={40} height={40} className="h-10 w-10 rounded-lg shadow-lg" />
             <span className="font-bold text-xl tracking-tight text-white">Apex SDR</span>
           </Link>
 

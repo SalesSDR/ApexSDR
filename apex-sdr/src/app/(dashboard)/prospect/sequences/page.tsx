@@ -6,12 +6,10 @@ import { useState } from "react";
 import useSWR from "swr";
 import { motion, AnimatePresence } from "framer-motion";
 import { Sparkles, Download, Upload, Grid, List, Layout, Plus, MessageSquare, Mail, Phone, Settings, AlertCircle, ChevronDown } from "lucide-react";
-import { API_BASE_URL } from "@/lib/config";
-
-const fetcher = (url: string) => fetch(url).then((res) => res.json());
+import { fetchApi } from "@/lib/api";
 
 export default function SequencesPage() {
-  const { data, error, mutate } = useSWR(`${API_BASE_URL}/sequences/current`, fetcher);
+  const { data, error, mutate } = useSWR("/sequences/current", fetchApi);
 
   const [saving, setSaving] = useState(false);
 
@@ -41,9 +39,8 @@ export default function SequencesPage() {
     mutate({ rule: updatedRule, steps }, false);
     
     try {
-      await fetch(`${API_BASE_URL}/sequences/rules`, {
+      await fetchApi("/sequences/rules", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(updatedRule)
       });
     } catch (e) {

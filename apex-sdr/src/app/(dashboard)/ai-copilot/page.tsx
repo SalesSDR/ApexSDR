@@ -49,9 +49,9 @@ export default function AICopilotPage() {
                 <span className="text-xs" style={{ color: "var(--apex-text-dim)" }}>{item.text}</span>
                 <span
                   className="ml-auto text-xs px-1.5 py-0.5 rounded"
-                  style={{ background: "rgba(245,158,11,0.12)", color: "var(--apex-gold)" }}
+                  style={{ background: "rgba(34,197,94,0.12)", color: "var(--apex-success)" }}
                 >
-                  Coming Soon
+                  Live
                 </span>
               </motion.div>
             ))}

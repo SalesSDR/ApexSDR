@@ -122,7 +122,7 @@ export function ProspectTable({ prospects, loading, error, totalCount }: Prospec
         <span className="text-xs" style={{ color: "var(--apex-muted)" }}>
           Active prospects:{" "}
           <span className="font-semibold" style={{ color: "var(--apex-text-dim)" }}>
-            {totalCount?.toLocaleString() ?? "1,250"}
+            {(totalCount ?? prospects.length).toLocaleString()}
           </span>
         </span>
         {selectedProspects.length > 0 && (

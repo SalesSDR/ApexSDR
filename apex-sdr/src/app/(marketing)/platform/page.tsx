@@ -5,7 +5,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { ArrowRight, Bot, Shield, Database, Zap, Search, Mail, Lock, Server, CheckCircle2, Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { APP_URL } from "@/lib/config";
 
 const pillars = [
   {

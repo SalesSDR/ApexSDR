@@ -3,11 +3,19 @@
 "use client";
 
 import { useEffect } from "react";
-import { API_BASE_URL, TENANT_ID } from "@/lib/api";
+import { API_BASE_URL, getAuthCredential } from "@/lib/api";
 
 export function useProspectStream(onEvent: (data: any) => void) {
   useEffect(() => {
-    const url = `${API_BASE_URL}/prospects/stream?tenant_id=${TENANT_ID}`;
+    // EventSource cannot set an Authorization header, so the credential
+    // travels as a query param here only - every other endpoint sends it
+    // via the Authorization header (see lib/api.ts#fetchApi).
+    const credential = getAuthCredential();
+    if (!credential) {
+      console.warn("No auth credential configured; skipping prospect stream connection.");
+      return;
+    }
+    const url = `${API_BASE_URL}/prospects/stream?token=${encodeURIComponent(credential)}`;
     const eventSource = new EventSource(url);
 
     eventSource.onmessage = (event) => {

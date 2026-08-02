@@ -1,10 +1,7 @@
-/* eslint-disable */
-// @ts-nocheck
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import type { ICPFilters, ICPSidebarCategory, ChatMessage } from "@/types";
-import icpData from "@/mocks/icpFilters.json";
 
 interface UseGetICPFiltersReturn {
   filters: ICPFilters | null;
@@ -12,38 +9,32 @@ interface UseGetICPFiltersReturn {
   conversation: ChatMessage[];
   loading: boolean;
   error: string | null;
-  refetch: () => void;
   setFilters: React.Dispatch<React.SetStateAction<ICPFilters | null>>;
   setConversation: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
 }
 
+/**
+ * Sprint 7.1: there is no backend endpoint for "the tenant's saved ICP
+ * filters" or "prior ICP chat history" - only the stateless /icp/parse and
+ * /icp/preview endpoints (see api/v1/icp.py). Rather than fabricate that
+ * data client-side, this starts from a genuinely empty state: no filters
+ * defined yet, no invented conversation history. The define-icp page's
+ * real conversation (handleSendMessage -> /icp/preview, via the
+ * authenticated fetchApi client) populates `conversation` as the user
+ * actually interacts.
+ */
 export function useGetICPFilters(): UseGetICPFiltersReturn {
   const [filters, setFilters] = useState<ICPFilters | null>(null);
-  const [sidebarCategories, setSidebarCategories] = useState<ICPSidebarCategory[]>([]);
+  const [sidebarCategories] = useState<ICPSidebarCategory[]>([]);
   const [conversation, setConversation] = useState<ChatMessage[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  const fetchData = () => {
-    setLoading(true);
-    setError(null);
-    setTimeout(() => {
-      try {
-        const { sidebarCategories: cats, conversationHistory, ...filterData } = icpData as any;
-        setFilters(filterData as ICPFilters);
-        setSidebarCategories(cats as ICPSidebarCategory[]);
-        setConversation(conversationHistory as ChatMessage[]);
-      } catch (err) {
-        setError("Failed to load ICP filters");
-      } finally {
-        setLoading(false);
-      }
-    }, 400);
+  return {
+    filters,
+    sidebarCategories,
+    conversation,
+    loading: false,
+    error: null,
+    setFilters,
+    setConversation,
   };
-
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  return { filters, sidebarCategories, conversation, loading, error, refetch: fetchData, setFilters, setConversation };
 }

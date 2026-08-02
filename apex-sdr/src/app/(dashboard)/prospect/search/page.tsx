@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { Header } from "@/components/layout/Header";
 import { Search, Users, Link as LinkIcon, Building2, Briefcase, Plus, Check } from "lucide-react";
-import { API_BASE_URL } from "@/lib/config";
+import { fetchApi } from "@/lib/api";
 import { toast } from "sonner";
 
 interface ApolloProfile {
@@ -43,13 +43,11 @@ export default function SearchPage() {
         per_page: 50
       };
 
-      const res = await fetch(`${API_BASE_URL}/apollo/search`, {
+      const data = await fetchApi("/apollo/search", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-      const data = await res.json();
-      
+
       if (data.people) {
         setResults(data.people);
       }
@@ -94,13 +92,11 @@ export default function SearchPage() {
       }));
 
     try {
-      const res = await fetch(`${API_BASE_URL}/prospects/import-from-apollo`, {
+      const data = await fetchApi("/prospects/import-from-apollo", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ profiles: profilesToImport })
       });
-      const data = await res.json();
-      
+
       if (data.status === "success") {
         toast.success(`Imported ${data.imported} prospects to pipeline. Skipped ${data.skipped} duplicates.`);
         setSelectedIds(new Set());
