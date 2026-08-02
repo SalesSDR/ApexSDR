@@ -3,13 +3,15 @@ FROM python:3.11-slim AS uv_installer
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
-COPY pyproject.toml .
-# Compile bytecode and create virtual environment
-ENV VIRTUAL_ENV=/opt/venv
-RUN uv venv /opt/venv && uv pip install -r pyproject.toml
+COPY pyproject.toml uv.lock ./
+# --locked fails the build instead of silently re-resolving if pyproject.toml
+# and uv.lock have drifted apart - every dependency actually installed is the
+# one pinned in the lockfile, not whatever the resolver would pick today.
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+RUN uv sync --locked --no-install-project
 
 # Clean execution container
-FROM python:3.11-slim as runner
+FROM python:3.11-slim AS runner
 
 WORKDIR /app
 

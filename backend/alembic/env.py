@@ -1,43 +1,42 @@
+import asyncio
+import logging
+import os
+import sys
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config
 from sqlalchemy import pool
+from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+from app.config import settings  # noqa: E402
+from app.models.base import Base  # noqa: E402
+from app.models import schemas  # noqa: E402,F401  (registers all tables on Base.metadata)
+
 config = context.config
+config.set_main_option("sqlalchemy.url", settings.DATABASE_ASYNC_URL)
 
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
+# This module also runs in-process (main.py calls alembic's command.upgrade()
+# on startup), where fileConfig() would otherwise permanently reset the host
+# app's logging: disable_existing_loggers=True (its default) disables every
+# logger the app already configured, and even with that off it still resets
+# the root logger's level/handlers per alembic.ini's [logger_root] section.
+# Snapshot and restore both around the whole migration run so CLI usage still
+# gets alembic's own formatted output, but the host app's logging is intact
+# once this module finishes.
+_root_logger = logging.getLogger()
+_original_level = _root_logger.level
+_original_handlers = _root_logger.handlers[:]
+
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
-# add your model's MetaData object here
-# for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
-target_metadata = None
-
-# other values from the config, defined by the needs of env.py,
-# can be acquired:
-# my_important_option = config.get_main_option("my_important_option")
-# ... etc.
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode.
-
-    This configures the context with just a URL
-    and not an Engine, though an Engine is acceptable
-    here as well.  By skipping the Engine creation
-    we don't even need a DBAPI to be available.
-
-    Calls to context.execute() here emit the given string to the
-    script output.
-
-    """
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
@@ -45,34 +44,32 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
-
     with context.begin_transaction():
         context.run_migrations()
 
 
-def run_migrations_online() -> None:
-    """Run migrations in 'online' mode.
+def do_run_migrations(connection):
+    context.configure(connection=connection, target_metadata=target_metadata)
+    with context.begin_transaction():
+        context.run_migrations()
 
-    In this scenario we need to create an Engine
-    and associate a connection with the context.
 
-    """
-    connectable = engine_from_config(
+async def run_migrations_online() -> None:
+    connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
-
-    with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
-
-        with context.begin_transaction():
-            context.run_migrations()
+    async with connectable.connect() as connection:
+        await connection.run_sync(do_run_migrations)
+    await connectable.dispose()
 
 
-if context.is_offline_mode():
-    run_migrations_offline()
-else:
-    run_migrations_online()
+try:
+    if context.is_offline_mode():
+        run_migrations_offline()
+    else:
+        asyncio.run(run_migrations_online())
+finally:
+    _root_logger.setLevel(_original_level)
+    _root_logger.handlers[:] = _original_handlers

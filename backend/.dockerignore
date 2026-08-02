@@ -1,0 +1,24 @@
+# Secrets - must never be baked into an image layer or pushed to a registry.
+# Render (and docker-compose) inject the real values as env vars at runtime.
+.env
+.env.*
+
+.git
+.gitignore
+
+# Local dev/test artifacts - not needed at runtime, only bloat the image.
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+tests/
+docs/
+scripts/
+test_connection.py
+test_sa_connection.py
+
+# IDE/OS cruft
+.vscode
+.idea
+.DS_Store
