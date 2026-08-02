@@ -1,19 +1,24 @@
 import logging
+from typing import Any
+
 import httpx
-from typing import Dict, Any, Optional
+
+from app.core.circuit_breaker import CircuitBreaker, CircuitOpenError
 
 logger = logging.getLogger(__name__)
+
+_APOLLO_PROVIDER = "APOLLO"
 
 class ApolloClient:
     """
     Service adapter for the Apollo.io API to perform prospect contact enrichment.
     """
-    def __init__(self, api_key: Optional[str], http_client: httpx.AsyncClient):
+    def __init__(self, api_key: str | None, http_client: httpx.AsyncClient):
         self.api_key = api_key
         self.client = http_client
         self.base_url = "https://api.apollo.io/v1"
 
-    async def enrich_contact(self, email: str, linkedin_url: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None) -> Dict[str, Any]:
+    async def enrich_contact(self, email: str, linkedin_url: str | None = None, first_name: str | None = None, last_name: str | None = None) -> dict[str, Any]:
         """
         Enriches a prospect's contact metadata using Apollo.io matches.
         Uses mixed_people/api_search to bypass strict email match limits.
@@ -51,7 +56,9 @@ class ApolloClient:
             payload["q_keywords"] = email.split('@')[0].replace('.', ' ')
 
         try:
-            response = await self.client.post(url, json=payload, headers=headers, timeout=10.0)
+            response = await CircuitBreaker.call(
+                _APOLLO_PROVIDER, self.client.post, url, json=payload, headers=headers, timeout=10.0
+            )
             if response.status_code == 200:
                 data = response.json()
                 people = data.get("people", [])
@@ -66,6 +73,8 @@ class ApolloClient:
                     logger.warning("Apollo API returned 200 but no people matched.")
             else:
                 logger.warning(f"Apollo API returned status: {response.status_code}")
+        except CircuitOpenError:
+            logger.warning("Apollo circuit is open; skipping enrichment request.")
         except Exception as e:
             logger.error(f"Apollo API enrichment request failed: {str(e)}")
 

@@ -1,23 +1,35 @@
-import json
-import uuid
 import asyncio
+import json
 import logging
-from datetime import datetime, timezone
+import uuid
+from datetime import UTC, datetime
+
+import redis.asyncio as aioredis
+from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy.ext.asyncio import AsyncSession
+from jose import JWTError, jwt
+from pydantic import BaseModel
 from sqlalchemy import select
-from arq import create_pool
-from arq.connections import RedisSettings
-import redis.asyncio as aioredis
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.auth import verify_tenant, verify_tenant_sse
 from app.config import settings
-from app.database import get_db, get_redis
-from app.api.v1.auth import verify_tenant
-from app.models.schemas import Prospect, WorkflowState, ActivityTimeline
-from app.schemas.prospects import ProspectCreateSchema, ProspectResponseSchema, ProspectListResponseSchema, BulkActionSchema, AdvanceActionSchema, UnipileImportSchema
-from app.core.state_machine import StateMachine
-from sqlalchemy import or_
+from app.core.state_machine import TERMINAL_STATES, transition_prospect
+from app.database import get_arq_pool, get_db, get_redis
+from app.models.schemas import ActivityTimeline, Prospect, ProspectState, WorkflowState
+from app.schemas.prospects import (
+    AdvanceActionSchema,
+    BulkActionSchema,
+    ProspectCreateSchema,
+    ProspectListResponseSchema,
+    ProspectResponseSchema,
+    UnipileImportSchema,
+)
+from app.services.ai import generate_outreach_message
+from app.services.personalization import PersonalizationService
+from app.workers.tasks import get_force_advance_plan
+
 router = APIRouter(prefix="/prospects", tags=["Prospects"])
 logger = logging.getLogger(__name__)
 
@@ -26,7 +38,8 @@ async def create_prospect(
     payload: ProspectCreateSchema,
     tenant_id: str = Depends(verify_tenant),
     db: AsyncSession = Depends(get_db),
-    redis: aioredis.Redis = Depends(get_redis)
+    redis: aioredis.Redis = Depends(get_redis),
+    arq_pool: ArqRedis = Depends(get_arq_pool),
 ):
     """
     Registers a new prospect under the caller's tenant boundary.
@@ -45,7 +58,8 @@ async def create_prospect(
     #         detail=f"An active prospect with the email '{payload.email}' already exists inside this workspace."
     #     )
 
-    # 1. Instantiate Prospect record
+    # 1. Instantiate Prospect record (status defaults to NEW, matching the
+    # run_waterfall_enrichment_task's entry point, enqueued below)
     prospect_id = str(uuid.uuid4())
     prospect = Prospect(
         id=prospect_id,
@@ -56,8 +70,8 @@ async def create_prospect(
         email=payload.email,
         linkedin_url=str(payload.linkedin_url),
         phone_number=payload.phone_number,
-        current_state="PENDING_ACCEPTANCE",
-        next_action_at=datetime.now(timezone.utc)
+        status=ProspectState.NEW,
+        next_action_at=datetime.now(UTC)
     )
     db.add(prospect)
 
@@ -66,7 +80,7 @@ async def create_prospect(
         id=str(uuid.uuid4()),
         tenant_id=tenant_id,
         prospect_id=prospect_id,
-        state="PENDING_ACCEPTANCE",
+        state=ProspectState.NEW.value,
         payload={
             "linkedin_step_count": 0,
             "email_step_count": 0,
@@ -75,9 +89,6 @@ async def create_prospect(
         }
     )
     db.add(wf_state)
-
-    # 2.5 Update the Prospect current_state as well
-    prospect.current_state = "PENDING_ACCEPTANCE"
 
     # 3. Log event timeline metrics
     timeline_event = ActivityTimeline(
@@ -97,25 +108,24 @@ async def create_prospect(
         "event_type": "PROSPECT_CREATED",
         "prospect_id": prospect_id,
         "tenant_id": tenant_id,
-        "state": "PENDING_ACCEPTANCE",
+        "state": ProspectState.NEW.value,
         "timestamp": datetime.utcnow().isoformat()
     }
     await redis.publish(f"tenant_updates:{tenant_id}", json.dumps(event_payload))
 
-    # Enqueue sequence initialization job via Redis Queue (ARQ)
-    arq_pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
+    # Enqueue enrichment/qualification job via Redis Queue (ARQ). Outbound
+    # sequencing only starts once run_waterfall_enrichment_task qualifies
+    # the prospect (NEW -> ENRICHING -> QUALIFIED -> IDLE).
     try:
-        await arq_pool.enqueue_job("start_outbound_sequence", prospect_id, tenant_id=tenant_id)
+        await arq_pool.enqueue_job("run_waterfall_enrichment_task", prospect_id)
+        await arq_pool.enqueue_job("sync_crm_contact_task", prospect_id)
     except Exception as e:
-        logger.error(f"Failed to enqueue outbound sequence initialization for prospect {prospect_id}: {str(e)}")
-    finally:
-        await arq_pool.close()
+        logger.error(f"Failed to enqueue enrichment initialization for prospect {prospect_id}: {e!s}")
 
     return {
         "status": "success",
         "data": {
             "id": prospect_id,
-            "current_state": "PENDING_ACCEPTANCE",
             "status": prospect.status,
             "tenant_id": tenant_id
         }
@@ -143,27 +153,31 @@ async def import_from_unipile(
     payload: UnipileImportSchema,
     tenant_id: str = Depends(verify_tenant),
     db: AsyncSession = Depends(get_db),
-    redis: aioredis.Redis = Depends(get_redis)
+    redis: aioredis.Redis = Depends(get_redis),
+    arq_pool: ArqRedis = Depends(get_arq_pool),
 ):
     """
     Imports selected profiles from Unipile Live Search.
     Filters out duplicates by provider_id.
-    Sets status = IDLE to trigger the autonomous pipeline instantly.
+    Sets status = NEW to route through qualification before outreach.
     """
-    from app.models.schemas import ProspectStatus
-    
     imported_count = 0
     skipped_count = 0
     imported_prospect_ids = []
 
-    for profile in payload.profiles:
-        # Check duplicate by provider_id
-        query = select(Prospect).where(
+    # Single batch fetch of already-known provider_ids rather than one
+    # duplicate-check SELECT per incoming profile.
+    incoming_provider_ids = [p.provider_id for p in payload.profiles if p.provider_id]
+    existing_provider_ids: set = set()
+    if incoming_provider_ids:
+        existing_query = select(Prospect.provider_id).where(
             Prospect.tenant_id == tenant_id,
-            Prospect.provider_id == profile.provider_id
+            Prospect.provider_id.in_(incoming_provider_ids),
         )
-        existing = await db.execute(query)
-        if existing.scalar_one_or_none():
+        existing_provider_ids = set((await db.execute(existing_query)).scalars().all())
+
+    for profile in payload.profiles:
+        if profile.provider_id and profile.provider_id in existing_provider_ids:
             skipped_count += 1
             continue
 
@@ -180,8 +194,7 @@ async def import_from_unipile(
             company_name=profile.organization_name,
             company_domain=profile.company_domain,
             provider_id=profile.provider_id,
-            current_state=(profile.title[:50] if profile.title else "Unipile Import"),
-            status=ProspectStatus.IDLE,
+            status=ProspectState.NEW,
             call_attempts=0,
             next_action_at=datetime.utcnow()
         )
@@ -191,7 +204,7 @@ async def import_from_unipile(
             id=str(uuid.uuid4()),
             tenant_id=tenant_id,
             prospect_id=prospect_id,
-            state="IDLE",
+            state=ProspectState.NEW.value,
             payload={}
         )
         db.add(wf_state)
@@ -212,14 +225,11 @@ async def import_from_unipile(
     await db.commit()
 
     if imported_prospect_ids:
-        arq_pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
         try:
             for pid in imported_prospect_ids:
                 await arq_pool.enqueue_job("run_waterfall_enrichment_task", pid)
         except Exception as e:
-            logger.error(f"Failed to enqueue enrichment tasks: {str(e)}")
-        finally:
-            await arq_pool.close()
+            logger.error(f"Failed to enqueue enrichment tasks: {e!s}")
 
     return {
         "status": "success",
@@ -229,12 +239,16 @@ async def import_from_unipile(
 
 @router.get("/stream")
 async def stream_prospect_updates(
-    tenant_id: str = Depends(verify_tenant),
+    tenant_id: str = Depends(verify_tenant_sse),
     redis: aioredis.Redis = Depends(get_redis)
 ):
     """
     Exposes a Server-Sent Events (SSE) endpoint transmitting real-time changes
     published by workers directly to frontend listeners.
+
+    Uses verify_tenant_sse (Authorization header OR ?token= query param)
+    rather than verify_tenant, since the browser-native EventSource this
+    powers cannot set an Authorization header.
     """
     async def event_generator():
         pubsub = redis.pubsub()
@@ -274,54 +288,36 @@ async def bulk_action(
     payload: BulkActionSchema,
     tenant_id: str = Depends(verify_tenant),
     db: AsyncSession = Depends(get_db),
-    redis: aioredis.Redis = Depends(get_redis)
+    redis: aioredis.Redis = Depends(get_redis),
+    arq_pool: ArqRedis = Depends(get_arq_pool),
 ):
     """
     Apply an action to multiple prospects in bulk.
     Currently supports: 'FORCE_ADVANCE', 'PAUSE'
     """
+    # Single batch fetch rather than one SELECT per prospect_id - the
+    # previous per-ID query loop meant a bulk action on N prospects made N
+    # round-trips to Postgres instead of 1.
+    query = select(Prospect).where(Prospect.id.in_(payload.prospect_ids), Prospect.tenant_id == tenant_id)
+    prospects_by_id = {p.id: p for p in (await db.execute(query)).scalars().all()}
+
     for pid in payload.prospect_ids:
-        # For 'FORCE_ADVANCE', we find current state and just jump
-        query = select(Prospect).where(Prospect.id == pid, Prospect.tenant_id == tenant_id)
-        res = await db.execute(query)
-        prospect = res.scalar_one_or_none()
-        
+        prospect = prospects_by_id.get(pid)
+
         if not prospect:
             continue
-            
-        if payload.action == "FORCE_ADVANCE":
-            target = "CLOSED"
-            task_to_enqueue = None
-            task_kwargs = {}
 
-            if prospect.current_state == "PROSPECT_CREATED":
-                target = "PENDING_ACCEPTANCE"
-                task_to_enqueue = "start_outbound_sequence"
-            elif prospect.current_state == "PENDING_ACCEPTANCE":
-                target = "CONNECTION_ACCEPTED"
-                task_to_enqueue = "execute_initial_message_task"
-            elif prospect.current_state == "CONNECTION_ACCEPTED":
-                target = "INITIAL_MSG_SENT"
-                task_to_enqueue = "execute_initial_message_task"
-            elif prospect.current_state in ["INITIAL_MSG_SENT", "WAITING_FOR_REPLY"]:
-                target = "FOLLOW_UP_SCHEDULED"
-                task_to_enqueue = "execute_follow_up_task"
-                task_kwargs = {"sequence_number": 1}
-            elif prospect.current_state in ["FOLLOW_UP_SCHEDULED", "FOLLOW_UP_SENT"]:
-                target = "CALL_SCHEDULED"
-                task_to_enqueue = "execute_call_task"
-                
+        if payload.action == "FORCE_ADVANCE":
+            target_status, task_to_enqueue, needs_tenant_id = get_force_advance_plan(prospect.status)
+            if target_status is not None:
+                transition_prospect(prospect, target_status)
+
             if task_to_enqueue:
-                arq_pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
-                try:
-                    await arq_pool.enqueue_job(task_to_enqueue, pid, tenant_id=tenant_id, **task_kwargs)
-                finally:
-                    await arq_pool.close()
+                task_kwargs = {"tenant_id": tenant_id} if needs_tenant_id else {}
+                await arq_pool.enqueue_job(task_to_enqueue, pid, **task_kwargs)
     await db.commit()
     return {"status": "success", "message": f"Applied {payload.action} to {len(payload.prospect_ids)} prospects"}
 
-from pydantic import BaseModel
-from jose import jwt, JWTError
 
 class EngagementEvent(BaseModel):
     event: str
@@ -340,7 +336,11 @@ async def prospect_engaged(
         
     if not token:
         raise HTTPException(status_code=403, detail="Missing auth token")
-        
+
+    if not settings.SECRET_KEY:
+        logger.error("SECRET_KEY is not configured; rejecting engagement token verification.")
+        raise HTTPException(status_code=503, detail="Engagement verification unavailable")
+
     try:
         decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
         prospect_id = decoded.get("prospect_id")
@@ -358,11 +358,11 @@ async def prospect_engaged(
         if not prospect:
             raise HTTPException(status_code=404, detail="Prospect not found")
             
-        if prospect.status in [ProspectStatus.MEETING_BOOKED, ProspectStatus.CALL_IN_PROGRESS, ProspectStatus.UNRESPONSIVE_DEAD, ProspectStatus.COMPLETED_DECLINED]:
-            logger.info(f"Prospect {prospect_id} interacted on website but is in terminal state ({prospect.status.value}). Ignoring.")
+        if prospect.status in TERMINAL_STATES | {ProspectState.MEETING_BOOKED, ProspectState.CALL_IN_PROGRESS}:
+            logger.info(f"Prospect {prospect_id} interacted on website but is in a halted state ({prospect.status.value}). Ignoring.")
             return {"status": "ignored", "reason": "terminal_state"}
-            
-        prospect.status = ProspectStatus.ENGAGED_ON_WEBSITE
+
+        transition_prospect(prospect, ProspectState.ENGAGED_ON_WEBSITE)
         prospect.next_action_at = None
         
         logger.info(f"Prospect {prospect_id} engaged on website via {payload.event}. Outbound sequences halted.")
@@ -375,7 +375,8 @@ async def advance_prospect(
     payload: AdvanceActionSchema,
     tenant_id: str = Depends(verify_tenant),
     db: AsyncSession = Depends(get_db),
-    redis: aioredis.Redis = Depends(get_redis)
+    redis: aioredis.Redis = Depends(get_redis),
+    arq_pool: ArqRedis = Depends(get_arq_pool),
 ):
     """
     Manually forces a prospect into the next logical state.
@@ -386,43 +387,175 @@ async def advance_prospect(
     if not prospect:
         raise HTTPException(status_code=404, detail="Prospect not found")
 
-    target = payload.target_state
-    task_to_enqueue = None
-    task_kwargs = {}
+    target_status, task_to_enqueue, needs_tenant_id = get_force_advance_plan(prospect.status)
 
-    if not target:
-        if prospect.current_state == "PROSPECT_CREATED":
-            # Force send linkedin connection
-            target = "PENDING_ACCEPTANCE"
-            task_to_enqueue = "start_outbound_sequence"
-        elif prospect.current_state == "PENDING_ACCEPTANCE":
-            # Simulate they accepted it
-            target = "CONNECTION_ACCEPTED"
-            task_to_enqueue = "execute_initial_message_task"
-        elif prospect.current_state == "CONNECTION_ACCEPTED":
-            # Just run initial msg
-            target = "INITIAL_MSG_SENT"
-            task_to_enqueue = "execute_initial_message_task"
-        elif prospect.current_state in ["INITIAL_MSG_SENT", "WAITING_FOR_REPLY"]:
-            # Force send followup
-            target = "FOLLOW_UP_SCHEDULED"
-            task_to_enqueue = "execute_follow_up_task"
-            task_kwargs = {"sequence_number": 1}
-        elif prospect.current_state in ["FOLLOW_UP_SCHEDULED", "FOLLOW_UP_SENT"]:
-            # Force make a call
-            target = "CALL_SCHEDULED"
-            task_to_enqueue = "execute_call_task"
-        else:
-            target = "CLOSED"
+    # Most hops enqueue a task whose own precondition already matches the
+    # prospect's current status, and the task transitions it on success (so a
+    # failed job doesn't leave the UI falsely showing it as advanced). The one
+    # exception is simulating an external acceptance event (e.g. LinkedIn
+    # accepted) that only this API can fake, which is why target_status is
+    # set here for that hop specifically.
+    if target_status is not None:
+        transition_prospect(prospect, target_status)
+        await db.commit()
 
-    # We do NOT transition the state here! We let the background task transition it upon success.
-    # Otherwise, if the API fails, the UI will falsely show it as advanced.
     if task_to_enqueue:
-        arq_pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
-        try:
-            await arq_pool.enqueue_job(task_to_enqueue, prospect_id, tenant_id=tenant_id, **task_kwargs)
-        finally:
-            await arq_pool.close()
-            
-    # We'll just return a success message saying the job is queued
+        task_kwargs = {"tenant_id": tenant_id} if needs_tenant_id else {}
+        await arq_pool.enqueue_job(task_to_enqueue, prospect_id, **task_kwargs)
+
     return {"status": "success", "message": f"Queued task {task_to_enqueue} for prospect."}
+
+class RescheduleMeetingSchema(BaseModel):
+    new_start: datetime
+    new_end: datetime
+    timezone: str = "America/New_York"
+
+@router.get("/{prospect_id}/preview-message", status_code=status.HTTP_200_OK)
+async def preview_message(
+    prospect_id: str,
+    prompt_type: str = "linkedin",
+    tenant_id: str = Depends(verify_tenant),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Sprint 4, item 3 / Sprint 5, item 1: previews the exact fully-
+    personalized outreach message PersonalizationService would generate for
+    this prospect and prompt_type - the same call every live outbound
+    channel (LinkedIn request/follow-up, Email 1/2, breakup email, and the
+    legacy follow-up/nudge tasks) now goes through.
+    """
+    query = select(Prospect).where(Prospect.id == prospect_id, Prospect.tenant_id == tenant_id)
+    res = await db.execute(query)
+    prospect = res.scalar_one_or_none()
+    if not prospect:
+        raise HTTPException(status_code=404, detail="Prospect not found")
+
+    context = await PersonalizationService.build_context(db, prospect)
+    message = await generate_outreach_message(
+        prospect_name=prospect.first_name,
+        company=prospect.company_name or "",
+        prompt_type=prompt_type,
+        context=context,
+    )
+
+    return {"status": "success", "data": {"message": message, "context_used": context}}
+
+@router.post("/{prospect_id}/cancel-meeting", status_code=status.HTTP_200_OK)
+async def cancel_meeting(
+    prospect_id: str,
+    tenant_id: str = Depends(verify_tenant),
+    db: AsyncSession = Depends(get_db),
+    arq_pool: ArqRedis = Depends(get_arq_pool),
+):
+    """
+    Cancels a prospect's booked calendar meeting. Never calls Google APIs
+    directly here - queues the cancellation through the same ARQ worker
+    the rest of the pipeline uses.
+    """
+    query = select(Prospect).where(Prospect.id == prospect_id, Prospect.tenant_id == tenant_id)
+    res = await db.execute(query)
+    prospect = res.scalar_one_or_none()
+    if not prospect:
+        raise HTTPException(status_code=404, detail="Prospect not found")
+
+    await arq_pool.enqueue_job("cancel_calendar_meeting_task", prospect_id)
+
+    return {"status": "success", "message": "Meeting cancellation queued."}
+
+@router.post("/{prospect_id}/reschedule-meeting", status_code=status.HTTP_200_OK)
+async def reschedule_meeting(
+    prospect_id: str,
+    payload: RescheduleMeetingSchema,
+    tenant_id: str = Depends(verify_tenant),
+    db: AsyncSession = Depends(get_db),
+    arq_pool: ArqRedis = Depends(get_arq_pool),
+):
+    """
+    Reschedules a prospect's meeting to a new time. Updates the existing
+    calendar event in place rather than creating a duplicate. Queued through
+    ARQ, never calling Google APIs directly from this request handler.
+    """
+    query = select(Prospect).where(Prospect.id == prospect_id, Prospect.tenant_id == tenant_id)
+    res = await db.execute(query)
+    prospect = res.scalar_one_or_none()
+    if not prospect:
+        raise HTTPException(status_code=404, detail="Prospect not found")
+
+    if payload.new_end <= payload.new_start:
+        raise HTTPException(status_code=400, detail="new_end must be after new_start")
+
+    await arq_pool.enqueue_job(
+        "reschedule_calendar_meeting_task",
+        prospect_id,
+        payload.new_start,
+        payload.new_end,
+        payload.timezone,
+    )
+
+    return {"status": "success", "message": "Meeting reschedule queued."}
+
+class DealOutcomeSchema(BaseModel):
+    deal_value: float | None = None
+
+@router.post("/{prospect_id}/mark-won", status_code=status.HTTP_200_OK)
+async def mark_deal_won(
+    prospect_id: str,
+    payload: DealOutcomeSchema = DealOutcomeSchema(),
+    tenant_id: str = Depends(verify_tenant),
+    db: AsyncSession = Depends(get_db),
+    arq_pool: ArqRedis = Depends(get_arq_pool),
+):
+    """
+    Sprint 5, item 5 (Revenue Attribution): records that a booked meeting
+    actually closed as a won deal. Deal-closing is inherently a human/CRM
+    judgment call - nothing in the pipeline auto-detects it - so this is a
+    deliberate operator action, not something the Decision Engine decides.
+
+    Sprint 6, item 1: queues the HubSpot deal-stage sync through ARQ
+    (sync_crm_deal_stage_task) rather than calling the CRM inline here, so
+    a HubSpot outage doesn't fail this request and gets retried through the
+    same centralized retry engine every other CRM sync uses.
+    """
+    query = select(Prospect).where(Prospect.id == prospect_id, Prospect.tenant_id == tenant_id)
+    res = await db.execute(query)
+    prospect = res.scalar_one_or_none()
+    if not prospect:
+        raise HTTPException(status_code=404, detail="Prospect not found")
+
+    if payload.deal_value is not None:
+        prospect.estimated_deal_value = payload.deal_value
+
+    try:
+        transition_prospect(prospect, ProspectState.CLOSED_WON)
+    except Exception as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    await db.commit()
+    await arq_pool.enqueue_job("sync_crm_deal_stage_task", prospect_id)
+    return {"status": "success", "data": {"id": prospect.id, "status": prospect.status.value, "estimated_deal_value": prospect.estimated_deal_value}}
+
+@router.post("/{prospect_id}/mark-lost", status_code=status.HTTP_200_OK)
+async def mark_deal_lost(
+    prospect_id: str,
+    tenant_id: str = Depends(verify_tenant),
+    db: AsyncSession = Depends(get_db),
+    arq_pool: ArqRedis = Depends(get_arq_pool),
+):
+    """Sprint 5, item 5: records that this prospect's deal was lost - the
+    counterpart to /mark-won, feeding lost_value in revenue analytics.
+    Sprint 6, item 1: also queues the HubSpot deal-stage sync (see
+    mark_deal_won above)."""
+    query = select(Prospect).where(Prospect.id == prospect_id, Prospect.tenant_id == tenant_id)
+    res = await db.execute(query)
+    prospect = res.scalar_one_or_none()
+    if not prospect:
+        raise HTTPException(status_code=404, detail="Prospect not found")
+
+    try:
+        transition_prospect(prospect, ProspectState.LOST)
+    except Exception as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    await db.commit()
+    await arq_pool.enqueue_job("sync_crm_deal_stage_task", prospect_id)
+    return {"status": "success", "data": {"id": prospect.id, "status": prospect.status.value}}

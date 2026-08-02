@@ -1,226 +1,182 @@
-import uuid
-import pytz
 import logging
-from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, Tuple
-from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
 
-from app.models.schemas import Prospect, WorkflowState, ActivityTimeline, FollowUp, WorkspaceSetting
+from app.models.schemas import Prospect, ProspectState
 
 logger = logging.getLogger(__name__)
 
-# State transitions map: Source State -> Allowed Destination States
-ALLOWED_TRANSITIONS = {
-    "PROSPECT_CREATED": ["LINKEDIN_REQ_SENT", "PENDING_ACCEPTANCE", "EMAIL_QUEUED", "CLOSED"],
-    "LINKEDIN_REQ_SENT": ["PENDING_ACCEPTANCE", "CONNECTION_ACCEPTED", "CLOSED"],
-    "PENDING_ACCEPTANCE": ["CONNECTION_ACCEPTED", "EMAIL_QUEUED", "PAUSED_RATE_LIMITED", "FAILED_INVALID_PROFILE", "PAUSED_ERROR", "CLOSED"],
-    "PAUSED_RATE_LIMITED": ["PENDING_ACCEPTANCE", "EMAIL_QUEUED", "CLOSED"],
-    "FAILED_INVALID_PROFILE": ["EMAIL_QUEUED", "CLOSED"],
-    "PAUSED_ERROR": ["PENDING_ACCEPTANCE", "EMAIL_QUEUED", "CLOSED"],
-    "CONNECTION_ACCEPTED": ["INITIAL_MSG_SENT", "LINKEDIN_SENT", "CLOSED"],
-    "INITIAL_MSG_SENT": ["WAITING_FOR_REPLY", "CLOSED"],
-    "LINKEDIN_SENT": ["FOLLOW_UP_SCHEDULED", "LINKEDIN_SENT", "EMAIL_SENT", "WAITING_FOR_REPLY", "CONVERSATION_ACTIVE", "CALL_QUEUED", "CLOSED"],
-    "EMAIL_SENT": ["FOLLOW_UP_SCHEDULED", "LINKEDIN_SENT", "EMAIL_SENT", "WAITING_FOR_REPLY", "CONVERSATION_ACTIVE", "CALL_QUEUED", "CLOSED"],
-    "WAITING_FOR_REPLY": ["FOLLOW_UP_SCHEDULED", "CONVERSATION_ACTIVE", "CALL_QUEUED", "CLOSED"],
-    "FOLLOW_UP_SCHEDULED": ["FOLLOW_UP_SENT", "LINKEDIN_SENT", "EMAIL_SENT", "CONVERSATION_ACTIVE", "CALL_QUEUED", "CLOSED"],
-    "FOLLOW_UP_SENT": ["CALL_SCHEDULED", "WAITING_FOR_REPLY", "CONVERSATION_ACTIVE", "CALL_QUEUED", "CLOSED"],
-    "CALL_SCHEDULED": ["CALL_QUEUED", "IN_CALL", "CALL_COMPLETED", "CONVERSATION_ACTIVE", "CLOSED"],
-    "CALL_QUEUED": ["CALL_QUEUED", "IN_CALL", "CALL_COMPLETED", "CONVERSATION_ACTIVE", "CLOSED"],
-    "IN_CALL": ["CALL_COMPLETED", "CONVERSATION_ACTIVE", "CLOSED"],
-    "CALL_COMPLETED": ["CLOSED", "CONVERSATION_ACTIVE"],
-    "CONVERSATION_ACTIVE": ["CALL_QUEUED", "CLOSED"],
-    "CLOSED": [],  # Terminal state
-    "EMAIL_QUEUED": ["EMAIL_SENT", "EMAIL_FAILED", "CLOSED"],
-    "EMAIL_FAILED": ["CLOSED"]
+
+class IllegalStateTransitionError(Exception):
+    """Raised when a transition isn't in ALLOWED_TRANSITIONS for the
+    prospect's current status. This is the single validated choke point for
+    every status change in the codebase - every task/webhook/route that
+    moves a prospect between states must go through transition_prospect()
+    rather than assigning `prospect.status` directly, so there is exactly
+    one place illegal transitions are rejected."""
+
+
+# Reachable from any non-terminal state: a website visit, an inbound reply,
+# or an unrecoverable pipeline error can all legitimately happen regardless
+# of where a prospect currently sits in the outreach flow (e.g. a LinkedIn
+# reply can arrive well after the pipeline has already escalated to email).
+ALWAYS_ALLOWED_TARGETS = {
+    ProspectState.ERROR_NEEDS_HUMAN,
+    ProspectState.ENGAGED_ON_WEBSITE,
+    ProspectState.LINKEDIN_REPLIED,
+    ProspectState.EMAIL_REPLIED,
 }
 
-class StateMachineError(Exception):
-    """Raised when an invalid state transition is requested."""
-    pass
+# Terminal states: no outbound transition is legal from here (other than the
+# always-allowed targets above, still permitted below via ALWAYS_ALLOWED_TARGETS).
+TERMINAL_STATES = {
+    ProspectState.DISQUALIFIED,
+    ProspectState.COMPLETED_DECLINED,
+    ProspectState.UNRESPONSIVE_DEAD,
+    ProspectState.LOST,
+    ProspectState.CLOSED_WON,
+}
 
-class StateMachine:
-    @staticmethod
-    def calculate_next_execution(base_time: datetime, delay_hours: int, settings: WorkspaceSetting) -> datetime:
-        """
-        Computes exact execution times while respecting configured work hours and weekend flags.
-        Ensures outbound interactions land naturally in the prospect's active time frame.
-        """
-        # Ensure base_time is timezone-aware and in UTC
-        if base_time.tzinfo is None:
-            base_time = pytz.utc.localize(base_time)
-        else:
-            base_time = base_time.astimezone(pytz.utc)
+ALLOWED_TRANSITIONS: dict[ProspectState, set[ProspectState]] = {
+    # Pre-outreach qualification phase
+    ProspectState.NEW: {ProspectState.ENRICHING},
+    ProspectState.ENRICHING: {ProspectState.QUALIFIED, ProspectState.DISQUALIFIED},
+    ProspectState.QUALIFIED: {ProspectState.IDLE},
+    ProspectState.DISQUALIFIED: set(),
 
-        target_time = base_time + timedelta(hours=delay_hours)
-        tz = pytz.timezone(settings.timezone)
-        target_localized = target_time.astimezone(tz)
+    # Outreach entry point
+    ProspectState.IDLE: {ProspectState.LI_REQ_SENT},
 
-        # Evaluate Weekend adjustments
-        if settings.exclude_weekends:
-            while target_localized.weekday() >= 5:  # Saturday=5, Sunday=6
-                target_localized += timedelta(days=1)
-                # Reset to beginning of workspace shift hours
-                h, m = map(int, settings.working_hours_start.split(":"))
-                target_localized = target_localized.replace(hour=h, minute=m, second=0, microsecond=0)
+    # LinkedIn channel
+    ProspectState.LI_REQ_SENT: {
+        ProspectState.LI_ACCEPTED_NO_MSG, ProspectState.LINKEDIN_NO_RESPONSE, ProspectState.EMAIL_SENT,
+    },
+    ProspectState.LI_ACCEPTED_NO_MSG: {ProspectState.LI_MSG_SENT},
+    ProspectState.LI_MSG_SENT: {ProspectState.EMAIL_SENT},
+    ProspectState.LINKEDIN_NO_RESPONSE: {ProspectState.EMAIL_SENT},
+    ProspectState.LINKEDIN_REPLIED: {
+        ProspectState.MEETING_BOOKED, ProspectState.PAUSED_NUDGED, ProspectState.COMPLETED_DECLINED,
+    },
 
-        # Evaluate Intraday bounds adjustment
-        start_h, start_m = map(int, settings.working_hours_start.split(":"))
-        end_h, end_m = map(int, settings.working_hours_end.split(":"))
+    # Email channel
+    ProspectState.EMAIL_SENT: {
+        ProspectState.EMAIL_OPENED, ProspectState.EMAIL_CLICKED, ProspectState.EMAIL_FAILED,
+        ProspectState.EMAIL_2_SENT, ProspectState.CALL_QUEUED, ProspectState.CALL_IN_PROGRESS,
+        ProspectState.UNRESPONSIVE_DEAD,  # no phone number on record - execute_call_task can reach this directly
+    },
+    ProspectState.EMAIL_OPENED: {
+        ProspectState.EMAIL_CLICKED, ProspectState.EMAIL_2_SENT, ProspectState.CALL_QUEUED, ProspectState.CALL_IN_PROGRESS,
+    },
+    ProspectState.EMAIL_CLICKED: {ProspectState.EMAIL_2_SENT, ProspectState.CALL_QUEUED, ProspectState.CALL_IN_PROGRESS},
+    ProspectState.EMAIL_FAILED: {ProspectState.EMAIL_2_SENT, ProspectState.CALL_QUEUED, ProspectState.CALL_IN_PROGRESS},
+    ProspectState.EMAIL_REPLIED: {
+        ProspectState.MEETING_BOOKED, ProspectState.PAUSED_NUDGED, ProspectState.COMPLETED_DECLINED,
+    },
+    # Email 2 (Sequence Engine step 4) - same shape as EMAIL_SENT above, one
+    # step further down whatever order the tenant's SequenceStep list uses.
+    ProspectState.EMAIL_2_SENT: {
+        ProspectState.EMAIL_OPENED, ProspectState.EMAIL_CLICKED, ProspectState.EMAIL_FAILED,
+        ProspectState.CALL_QUEUED, ProspectState.CALL_IN_PROGRESS, ProspectState.UNRESPONSIVE_DEAD,
+    },
 
-        current_h = target_localized.hour
-        current_m = target_localized.minute
+    # Call channel
+    ProspectState.CALL_QUEUED: {ProspectState.CALL_IN_PROGRESS, ProspectState.UNRESPONSIVE_DEAD},
+    ProspectState.CALL_IN_PROGRESS: {
+        ProspectState.CALL_CONNECTED, ProspectState.CALL_NO_ANSWER_1, ProspectState.CALL_FAILED, ProspectState.UNRESPONSIVE_DEAD,
+        ProspectState.MEETING_BOOKED,  # some Twilio integrations never emit a distinct "answered" event
+    },
+    # CALL_QUEUED (Sprint 7): a live voice conversation can end with a
+    # "call me back" outcome (Decision Engine's RETRY_LATER for a voice
+    # turn) - re-queues the call rather than leaving the prospect stranded
+    # in CALL_CONNECTED with no legal way forward.
+    ProspectState.CALL_CONNECTED: {ProspectState.MEETING_BOOKED, ProspectState.COMPLETED_DECLINED, ProspectState.CALL_QUEUED},
+    ProspectState.CALL_NO_ANSWER_1: {
+        ProspectState.CALL_IN_PROGRESS, ProspectState.CALL_NO_ANSWER_2, ProspectState.CALL_RETRY,
+        ProspectState.UNRESPONSIVE_DEAD,  # no phone number on record - execute_call_task can reach this directly
+    },
+    ProspectState.CALL_NO_ANSWER_2: {
+        ProspectState.CALL_IN_PROGRESS, ProspectState.CALL_RETRY, ProspectState.UNRESPONSIVE_DEAD,
+        ProspectState.VOICEMAIL_LEFT,  # call retries exhausted - Sequence Engine moves on to the Voicemail step
+    },
+    ProspectState.CALL_RETRY: {ProspectState.CALL_IN_PROGRESS},
+    ProspectState.CALL_FAILED: {ProspectState.UNRESPONSIVE_DEAD, ProspectState.VOICEMAIL_LEFT},
 
-        # Calculate time as minutes since midnight to make comparison robust
-        current_minutes = current_h * 60 + current_m
-        start_minutes = start_h * 60 + start_m
-        end_minutes = end_h * 60 + end_m
+    # Voicemail (Sequence Engine step 6) and Breakup Email (step 7) - the
+    # final two configurable steps after Call.
+    ProspectState.VOICEMAIL_LEFT: {ProspectState.BREAKUP_EMAIL_SENT, ProspectState.UNRESPONSIVE_DEAD},
+    ProspectState.BREAKUP_EMAIL_SENT: {ProspectState.UNRESPONSIVE_DEAD, ProspectState.COMPLETED_DECLINED},
 
-        if current_minutes < start_minutes:
-            target_localized = target_localized.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
-        elif current_minutes >= end_minutes:
-            # Push to next calendar day window
-            target_localized += timedelta(days=1)
-            target_localized = target_localized.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
-            # Re-evaluate weekend rules recursively in case we pushed into a weekend
-            if settings.exclude_weekends and target_localized.weekday() >= 5:
-                return StateMachine.calculate_next_execution(target_localized, 0, settings)
+    # Post-engagement outcomes
+    ProspectState.MEETING_BOOKED: {ProspectState.CLOSED_WON, ProspectState.COMPLETED_DECLINED, ProspectState.LOST},
+    ProspectState.PAUSED_NUDGED: {
+        ProspectState.MEETING_BOOKED, ProspectState.COMPLETED_DECLINED, ProspectState.LOST,
+        ProspectState.EMAIL_SENT, ProspectState.LI_MSG_SENT, ProspectState.CALL_IN_PROGRESS,
+    },
 
-        return target_localized.astimezone(pytz.utc)
+    # Terminal states
+    ProspectState.COMPLETED_DECLINED: set(),
+    ProspectState.UNRESPONSIVE_DEAD: set(),
+    ProspectState.LOST: set(),
+    ProspectState.CLOSED_WON: set(),
 
-    @staticmethod
-    async def check_idempotency(redis: Redis, token: str) -> bool:
-        """
-        Checks if token exists in Redis. If not, registers it with 24h TTL.
-        Returns True if the token is unique and registered, False if it is a duplicate.
-        """
-        if not token:
-            return True
-        key = f"idempotency:{token}"
-        # Set with 24 hour TTL if it doesn't exist
-        acquired = await redis.set(key, "processed", ex=86400, nx=True)
-        return bool(acquired)
+    # Escape-hatch states can recover back into the pipeline
+    ProspectState.ERROR_NEEDS_HUMAN: {ProspectState.IDLE},
+    ProspectState.ENGAGED_ON_WEBSITE: {ProspectState.MEETING_BOOKED, ProspectState.COMPLETED_DECLINED},
+}
 
-    @staticmethod
-    async def transition(
-        db: AsyncSession,
-        redis: Redis,
-        prospect_id: str,
-        new_state: str,
-        event_trigger: str,
-        payload_updates: Optional[Dict[str, Any]] = None,
-        idempotency_token: Optional[str] = None,
-        force: bool = False
-    ) -> Tuple[Prospect, WorkflowState]:
-        """
-        Transition a prospect's state, tracking historical events and ensuring idempotency.
-        """
-        # 1. High-speed Redis Idempotency Guard
-        if idempotency_token:
-            is_unique = await StateMachine.check_idempotency(redis, idempotency_token)
-            if not is_unique:
-                logger.warning(f"Duplicate task execution blocked by Redis idempotency guard: {idempotency_token}")
-                # Load and return current state
-                p_res = await db.execute(select(Prospect).where(Prospect.id == prospect_id))
-                prospect = p_res.scalar_one()
-                w_res = await db.execute(select(WorkflowState).where(WorkflowState.prospect_id == prospect_id))
-                wf_state = w_res.scalar_one()
-                return prospect, wf_state
+# Sequence-step "completed" states, in the tenant-configurable order the
+# Sequence Engine may run them (LinkedIn, LinkedIn Follow-up, Email 1,
+# Email 2, Call, Voicemail, Breakup Email - see workers/tasks.py's
+# execute_sequence_step_task). A tenant's SequenceStep rows can put these
+# channels in ANY order or skip some entirely, so the state machine allows
+# jumping from any one of these states directly to any LATER one in this
+# reference list - it only guards against moving *backward* or skipping
+# into an unrelated state, never against which specific channel is next.
+# ALLOWED_TRANSITIONS above still governs every other kind of transition
+# (event-driven replies, call sub-state retries, terminal states) unchanged.
+_SEQUENCE_STEP_STATE_ORDER = [
+    ProspectState.IDLE,
+    ProspectState.LI_REQ_SENT,
+    ProspectState.LI_ACCEPTED_NO_MSG,
+    ProspectState.LI_MSG_SENT,
+    ProspectState.EMAIL_SENT,
+    ProspectState.EMAIL_2_SENT,
+    ProspectState.CALL_IN_PROGRESS,
+    ProspectState.VOICEMAIL_LEFT,
+    ProspectState.BREAKUP_EMAIL_SENT,
+]
+_SEQUENCE_STEP_STATE_INDEX = {state: i for i, state in enumerate(_SEQUENCE_STEP_STATE_ORDER)}
 
-        # Use explicit atomic database ledger
-        async with db.begin_nested() if db.in_transaction() else db.begin():
-            # Fetch entities
-            p_res = await db.execute(select(Prospect).where(Prospect.id == prospect_id))
-            prospect = p_res.scalar_one_or_none()
-            if not prospect:
-                raise StateMachineError(f"Prospect with ID {prospect_id} not found.")
 
-            w_res = await db.execute(select(WorkflowState).where(WorkflowState.prospect_id == prospect_id))
-            wf_state = w_res.scalar_one_or_none()
-            if not wf_state:
-                wf_state = WorkflowState(
-                    id=str(uuid.uuid4()),
-                    prospect_id=prospect.id,
-                    tenant_id=prospect.tenant_id,
-                    state=prospect.current_state,
-                    payload={}
-                )
-                db.add(wf_state)
+def _is_forward_sequence_progression(current: ProspectState, new: ProspectState) -> bool:
+    current_idx = _SEQUENCE_STEP_STATE_INDEX.get(current)
+    new_idx = _SEQUENCE_STEP_STATE_INDEX.get(new)
+    if current_idx is None or new_idx is None:
+        return False
+    return new_idx > current_idx
 
-            # 2. Database level idempotency guard: check in payload
-            if idempotency_token and wf_state.payload.get("processed_tokens", {}).get(idempotency_token):
-                logger.warning(f"Duplicate task execution blocked by DB payload check: {idempotency_token}")
-                return prospect, wf_state
 
-            # Validate transition path (Any state is allowed to shift to CLOSED or CONVERSATION_ACTIVE)
-            current = prospect.current_state
-            if current != new_state and not force:
-                allowed = ALLOWED_TRANSITIONS.get(current, [])
-                if new_state not in allowed and new_state not in ["CLOSED", "CONVERSATION_ACTIVE"]:
-                    raise StateMachineError(f"Illegal state transition from {current} to {new_state}.")
+def validate_transition(current: ProspectState, new: ProspectState) -> None:
+    """Raises IllegalStateTransitionError if `current -> new` isn't allowed.
+    A transition to the same state is always a no-op allowed (idempotent
+    retries/re-affirmations shouldn't need special-casing at every call site).
+    Terminal states reject every transition, even the always-allowed targets -
+    once closed, a prospect only re-enters the pipeline through deliberate
+    business logic (e.g. a new campaign), never a raw status transition."""
+    if current == new:
+        return
+    if current in TERMINAL_STATES:
+        raise IllegalStateTransitionError(f"Illegal state transition: {current.value} -> {new.value} (terminal state)")
+    if new in ALWAYS_ALLOWED_TARGETS:
+        return
+    if _is_forward_sequence_progression(current, new):
+        return
+    allowed = ALLOWED_TRANSITIONS.get(current, set())
+    if new not in allowed:
+        raise IllegalStateTransitionError(f"Illegal state transition: {current.value} -> {new.value}")
 
-            # Shift states
-            prospect.current_state = new_state
-            wf_state.state = new_state
 
-            # Merge payload updates
-            if not wf_state.payload:
-                wf_state.payload = {}
-            if payload_updates:
-                wf_state.payload.update(payload_updates)
-
-            # Record idempotency token in the DB payload
-            if idempotency_token:
-                if "processed_tokens" not in wf_state.payload:
-                    wf_state.payload["processed_tokens"] = {}
-                wf_state.payload["processed_tokens"][idempotency_token] = datetime.utcnow().isoformat()
-
-            # Log to ActivityTimeline
-            timeline_event = ActivityTimeline(
-                id=str(uuid.uuid4()),
-                tenant_id=prospect.tenant_id,
-                prospect_id=prospect.id,
-                channel=StateMachine._get_channel_for_state(new_state),
-                event_type=StateMachine._get_event_type_for_trigger(event_trigger),
-                description=f"State transitioned from {current} to {new_state}. Trigger: {event_trigger}"
-            )
-            db.add(timeline_event)
-
-            # Side effects
-            if new_state in ["CONVERSATION_ACTIVE", "CLOSED"]:
-                # Cancel all downstream pending FollowUp entities
-                await db.execute(
-                    update(FollowUp)
-                    .where(FollowUp.prospect_id == prospect_id, FollowUp.status == "PENDING")
-                    .values(status="CANCELED")
-                )
-                logger.info(f"Cancelled downstream pending follow-ups for prospect {prospect_id} due to state {new_state}")
-
-            await db.flush()
-            return prospect, wf_state
-
-    @staticmethod
-    def _get_channel_for_state(state: str) -> str:
-        if "LINKEDIN" in state:
-            return "LINKEDIN"
-        elif "EMAIL" in state or "FOLLOW_UP" in state:
-            return "EMAIL"
-        elif "CALL" in state:
-            return "CALL"
-        else:
-            return "SYSTEM"
-
-    @staticmethod
-    def _get_event_type_for_trigger(trigger: str) -> str:
-        t_upper = trigger.upper()
-        if "SENT" in t_upper or "INITIAL" in t_upper:
-            return "SENT"
-        elif "ACCEPT" in t_upper:
-            return "ACCEPTED"
-        elif "REPLY" in t_upper:
-            return "REPLY"
-        elif "FAIL" in t_upper:
-            return "FAILED"
-        else:
-            return "SYSTEM_EVENT"
+def transition_prospect(prospect: Prospect, new_state: ProspectState) -> None:
+    """The single validated choke point for changing prospect.status."""
+    validate_transition(prospect.status, new_state)
+    if prospect.status != new_state:
+        logger.info(f"Prospect {prospect.id} transitioning {prospect.status.value} -> {new_state.value}")
+    prospect.status = new_state

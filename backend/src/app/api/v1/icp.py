@@ -1,12 +1,16 @@
-import logging
 import json
-import httpx
-from typing import Optional
-from fastapi import APIRouter, status, HTTPException
-from pydantic import BaseModel
-import google.generativeai as genai
+import logging
 
+import google.generativeai as genai
+import httpx
+import redis.asyncio as aioredis
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
+
+from app.api.v1.auth import verify_tenant
 from app.config import settings
+from app.core.rate_limit import enforce_rate_limit
+from app.database import get_redis
 from app.services.ai import parse_icp_query
 
 logger = logging.getLogger(__name__)
@@ -18,23 +22,51 @@ class ParseICPRequest(BaseModel):
 
 class ICPQuery(BaseModel):
     prompt: str
-    account_id: Optional[str] = None
+    account_id: str | None = None
 
 @router.post("/icp/parse", status_code=status.HTTP_200_OK)
-async def parse_icp_filters(request: ParseICPRequest):
+async def parse_icp_filters(
+    request: ParseICPRequest,
+    tenant_id: str = Depends(verify_tenant),
+    redis: aioredis.Redis = Depends(get_redis),
+):
     """
     Parses a natural language query into structured ICP filters using AI.
+    Requires authentication, is rate-limited per tenant, and every request
+    is audit-logged - same authorization model as /api/v1/apollo/search.
     """
+    await enforce_rate_limit(
+        redis,
+        key=f"ratelimit:icp:{tenant_id}",
+        limit=settings.ICP_RATE_LIMIT_PER_MINUTE,
+        window_seconds=60,
+    )
+    logger.info(f"AUDIT icp_parse tenant_id={tenant_id}")
+
     logger.info(f"Parsing ICP query: {request.query}")
     filters = await parse_icp_query(request.query)
     return {"status": "success", "filters": filters}
 
 @router.post("/icp/preview", status_code=status.HTTP_200_OK)
-async def preview_icp(request: ICPQuery):
+async def preview_icp(
+    request: ICPQuery,
+    tenant_id: str = Depends(verify_tenant),
+    redis: aioredis.Redis = Depends(get_redis),
+):
     """
     Bypasses data broker limitations by generating a Unipile JSON payload via Gemini,
     then calling the Unipile LinkedIn search endpoint to fetch live data directly.
+    Requires authentication, is rate-limited per tenant, and every request
+    is audit-logged - same authorization model as /api/v1/apollo/search.
     """
+    await enforce_rate_limit(
+        redis,
+        key=f"ratelimit:icp:{tenant_id}",
+        limit=settings.ICP_RATE_LIMIT_PER_MINUTE,
+        window_seconds=60,
+    )
+    logger.info(f"AUDIT icp_preview tenant_id={tenant_id}")
+
     if not settings.UNIPILE_API_KEY:
         raise HTTPException(status_code=500, detail="UNIPILE_API_KEY is not configured.")
         
@@ -48,7 +80,7 @@ async def preview_icp(request: ICPQuery):
     logger.info(f"Generating Unipile preview for prompt: {request.prompt}")
     
     # Use Gemini to map the natural language query to a standard LinkedIn Search URL
-    system_prompt = f"""
+    system_prompt = """
     You are an expert at mapping user intents to LinkedIn Search URLs.
     The user will give you a natural language prompt about who they want to find.
     You must construct a valid standard LinkedIn search URL.
@@ -57,9 +89,9 @@ async def preview_icp(request: ICPQuery):
     Keep the URL simple, mostly relying on the `keywords` parameter.
     
     Example output format:
-    {{
+    {
       "url": "https://www.linkedin.com/search/results/people/?keywords=software%20engineer"
-    }}
+    }
     
     Ensure you return a raw JSON object with NO markdown ticks.
     """

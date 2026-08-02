@@ -1,6 +1,10 @@
+from collections.abc import AsyncGenerator
+
 import redis.asyncio as aioredis
-from typing import AsyncGenerator
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from arq.connections import ArqRedis
+from fastapi import Request
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
 from app.config import settings
 
 # Create async engine with robust pool configuration
@@ -42,4 +46,21 @@ async def get_redis() -> AsyncGenerator[aioredis.Redis, None]:
     FastAPI dependency yielding Redis client.
     """
     yield redis_client
+
+
+async def get_arq_pool(request: Request) -> ArqRedis:
+    """
+    Returns the single shared ARQ Redis pool created once at app startup
+    (see app.main's startup handler) instead of opening a new connection
+    pool per request/job-enqueue - every route that previously called
+    `await create_pool(...)` ad hoc now takes this dependency instead.
+    """
+    pool = getattr(request.app.state, "arq_redis", None)
+    if pool is None:
+        raise RuntimeError(
+            "ARQ Redis pool is not initialized on app.state.arq_redis. "
+            "Ensure the app startup handler has run (or a test fixture has "
+            "set app.state.arq_redis) before handling requests."
+        )
+    return pool
 
