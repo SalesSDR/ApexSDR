@@ -3,7 +3,14 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from app.models.schemas import CompliancePolicyType, DecisionType, DoNotContactList, PolicySeverity, Prospect
+from app.models.schemas import (
+    CompliancePolicyType,
+    DecisionType,
+    DoNotContactList,
+    PolicySeverity,
+    Prospect,
+    WorkspaceSetting,
+)
 from app.services.compliance.base import ComplianceCheck
 
 # Every policy function shares this signature - (db_session, prospect,
@@ -48,32 +55,55 @@ async def check_do_not_contact(db_session, prospect: Prospect, proposed_action: 
     return ComplianceCheck(is_allowed=True)
 
 
-def is_within_business_hours(now_utc: datetime, prospect_tz: str, start_hour: int = 9, end_hour: int = 17) -> bool:
-    """Real timezone-aware check: Mon-Fri, [start_hour, end_hour) local time
-    in the prospect's own timezone - not a UTC-only weekend check. Falls
-    back to UTC for an unrecognized timezone name rather than raising."""
+def is_within_business_hours(
+    now_utc: datetime,
+    prospect_tz: str,
+    start_hour: int = 9,
+    end_hour: int = 17,
+    exclude_weekends: bool = True,
+) -> bool:
+    """Real timezone-aware check: [start_hour, end_hour) local time in the
+    prospect's own timezone, Mon-Fri only when `exclude_weekends` is True
+    (the default, matching this check's original always-block-weekends
+    behavior) - not a UTC-only weekend check. Falls back to UTC for an
+    unrecognized timezone name rather than raising."""
     try:
         tz = zoneinfo.ZoneInfo(prospect_tz)
     except Exception:
         tz = zoneinfo.ZoneInfo("UTC")
     local_time = now_utc.astimezone(tz)
-    if local_time.weekday() >= 5:
+    if exclude_weekends and local_time.weekday() >= 5:
         return False
     return start_hour <= local_time.hour < end_hour
 
 
 async def check_business_hours(db_session, prospect: Prospect, proposed_action: DecisionType, prospect_tz: str = "UTC") -> ComplianceCheck:
-    """Ensures outreach is only sent during business hours (Mon-Fri 9am-5pm)
-    in the prospect's own timezone - previously this only checked the
-    weekend in UTC and ignored the passed-in timezone/hour-of-day
-    entirely, despite the docstring's claim."""
+    """Ensures outreach is only sent during business hours (9am-5pm) in the
+    prospect's own timezone - previously this only checked the weekend in
+    UTC and ignored the passed-in timezone/hour-of-day entirely, despite the
+    docstring's claim.
+
+    Whether weekends are excluded from the allowed window is per-tenant
+    configurable via WorkspaceSetting.exclude_weekends. Defaults to True
+    (weekends blocked, the original hardcoded behavior) whenever no
+    db_session is available to look it up."""
+    exclude_weekends = True
+    if db_session is not None:
+        result = await db_session.execute(
+            select(WorkspaceSetting.exclude_weekends).where(WorkspaceSetting.tenant_id == prospect.tenant_id)
+        )
+        configured = result.scalar_one_or_none()
+        if configured is not None:
+            exclude_weekends = configured
+
     now_utc = datetime.now(UTC)
-    if not is_within_business_hours(now_utc, prospect_tz):
+    if not is_within_business_hours(now_utc, prospect_tz, exclude_weekends=exclude_weekends):
+        day_scope = "Mon-Fri" if exclude_weekends else "any day"
         return ComplianceCheck(
             is_allowed=False,
             policy_type=CompliancePolicyType.BUSINESS_HOURS,
             severity=PolicySeverity.TEMPORARY_BLOCK,
-            reason=f"Outside business hours (9am-5pm, Mon-Fri) in {prospect_tz}."
+            reason=f"Outside business hours (9am-5pm, {day_scope}) in {prospect_tz}."
         )
     return ComplianceCheck(is_allowed=True)
 

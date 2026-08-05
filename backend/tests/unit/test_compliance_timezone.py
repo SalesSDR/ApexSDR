@@ -3,6 +3,8 @@ item 4): ProductionComplianceProvider must differ from MockComplianceProvider
 without duplicating its validate() logic."""
 from datetime import UTC, datetime
 
+import pytest
+
 from app.config import settings
 from app.services.compliance.base import BaseComplianceProvider
 from app.services.compliance.mock import MockComplianceProvider
@@ -70,6 +72,125 @@ async def test_check_business_hours_reports_the_prospect_timezone_in_the_reason(
 
     assert not check.is_allowed
     assert "America/Los_Angeles" in check.reason
+
+
+# --- check_business_hours reads WorkspaceSetting.exclude_weekends (Sprint RC-1 fix) ---
+# Previously this setting was stored/returned correctly but never read by the
+# compliance engine, which always hardcoded weekend-blocking regardless of it.
+
+class _FrozenAt:
+    """Context manager freezing app.services.compliance.policy's `datetime.now()`
+    to a fixed UTC instant, restoring the original class afterward."""
+
+    def __init__(self, year, month, day, hour, minute=0):
+        self._target = datetime(year, month, day, hour, minute, tzinfo=UTC)
+
+    def __enter__(self):
+        import app.services.compliance.policy as policy_module
+        self._module = policy_module
+        self._original = policy_module.datetime
+        target = self._target
+
+        class _Frozen(self._original):
+            @classmethod
+            def now(cls, tz=None):
+                return target
+
+        policy_module.datetime = _Frozen
+        return self
+
+    def __exit__(self, *exc):
+        self._module.datetime = self._original
+
+
+async def _make_prospect_with_setting(db_session, tenant_id: str, exclude_weekends: bool | None):
+    from app.models.schemas import Prospect, WorkspaceSetting
+
+    if exclude_weekends is not None:
+        db_session.add(WorkspaceSetting(tenant_id=tenant_id, exclude_weekends=exclude_weekends))
+    prospect = Prospect(
+        tenant_id=tenant_id, first_name="A", last_name="B",
+        linkedin_url="https://x", email=f"{tenant_id}@example.com",
+    )
+    db_session.add(prospect)
+    await db_session.flush()
+    return prospect
+
+
+async def test_check_business_hours_blocks_weekend_when_exclude_weekends_configured_true(db_session):
+    from app.models.schemas import DecisionType
+    prospect = await _make_prospect_with_setting(db_session, "t-weekend-excluded", exclude_weekends=True)
+
+    # 2026-08-08 is a Saturday, 14:00 UTC = 10am America/New_York (EDT).
+    with _FrozenAt(2026, 8, 8, 14):
+        check = await check_business_hours(db_session, prospect, DecisionType.SEND_EMAIL, "America/New_York")
+
+    assert not check.is_allowed
+    assert "Mon-Fri" in check.reason
+
+
+async def test_check_business_hours_allows_weekend_when_exclude_weekends_configured_false(db_session):
+    from app.models.schemas import DecisionType
+    prospect = await _make_prospect_with_setting(db_session, "t-weekend-allowed", exclude_weekends=False)
+
+    # Same Saturday 10am local instant as above - only the setting differs.
+    with _FrozenAt(2026, 8, 8, 14):
+        check = await check_business_hours(db_session, prospect, DecisionType.SEND_EMAIL, "America/New_York")
+
+    assert check.is_allowed
+
+
+async def test_check_business_hours_defaults_to_blocking_weekends_when_no_setting_row_exists(db_session):
+    """A tenant with no WorkspaceSetting row at all keeps the original,
+    safe default (weekends blocked) rather than silently allowing them."""
+    from app.models.schemas import DecisionType
+    prospect = await _make_prospect_with_setting(db_session, "t-no-setting-row", exclude_weekends=None)
+
+    with _FrozenAt(2026, 8, 8, 14):
+        check = await check_business_hours(db_session, prospect, DecisionType.SEND_EMAIL, "America/New_York")
+
+    assert not check.is_allowed
+
+
+@pytest.mark.parametrize("exclude_weekends", [True, False])
+async def test_check_business_hours_weekday_behavior_unchanged_by_the_setting(db_session, exclude_weekends):
+    """The setting only changes weekend handling - a weekday during business
+    hours is allowed, and a weekday outside business hours is blocked,
+    regardless of what exclude_weekends is configured to."""
+    from app.models.schemas import DecisionType
+    prospect = await _make_prospect_with_setting(db_session, f"t-weekday-{exclude_weekends}", exclude_weekends=exclude_weekends)
+
+    # 2026-08-03 is a Monday. 14:00 UTC = 10am America/New_York (within hours).
+    with _FrozenAt(2026, 8, 3, 14):
+        check = await check_business_hours(db_session, prospect, DecisionType.SEND_EMAIL, "America/New_York")
+    assert check.is_allowed
+
+    # 11:00 UTC = 7am America/New_York (before the 9am start) - same Monday.
+    with _FrozenAt(2026, 8, 3, 11):
+        check = await check_business_hours(db_session, prospect, DecisionType.SEND_EMAIL, "America/New_York")
+    assert not check.is_allowed
+
+
+async def test_check_business_hours_still_enforces_hour_of_day_when_weekends_allowed(db_session):
+    """Turning off weekend exclusion must not turn off the hour-of-day
+    check - a Saturday at 2am local is still outside business hours."""
+    from app.models.schemas import DecisionType
+    prospect = await _make_prospect_with_setting(db_session, "t-weekend-2am", exclude_weekends=False)
+
+    # 2026-08-08 is a Saturday. 06:00 UTC = 2am America/New_York (EDT).
+    with _FrozenAt(2026, 8, 8, 6):
+        check = await check_business_hours(db_session, prospect, DecisionType.SEND_EMAIL, "America/New_York")
+
+    assert not check.is_allowed
+    assert "any day" in check.reason
+
+
+def test_is_within_business_hours_exclude_weekends_false_allows_saturday_within_hours():
+    """Direct unit test of the lower-level helper's new parameter, isolated
+    from the DB-backed check_business_hours above."""
+    now_utc = datetime(2026, 8, 8, 14, 0, tzinfo=UTC)  # Saturday, 10am America/New_York
+    assert is_within_business_hours(now_utc, "America/New_York", exclude_weekends=False) is True
+    assert is_within_business_hours(now_utc, "America/New_York", exclude_weekends=True) is False
 
 
 # --- Configurable policy loading / Mock vs Production must differ ---
