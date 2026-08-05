@@ -15,7 +15,10 @@ import {
   PhoneCall,
   UserCheck,
   UserPlus,
+  UserX,
   Link2,
+  Trophy,
+  Voicemail,
 } from "lucide-react";
 
 type StageVariant = "linkedin" | "email" | "call";
@@ -62,6 +65,18 @@ const linkedInConfig: Record<LinkedInStage, { color: string; bg: string; border:
     bg: "rgba(6,182,212,0.1)",
     border: "rgba(6,182,212,0.2)",
     icon: <UserPlus size={11} />,
+  },
+  Disqualified: {
+    color: "#ef4444",
+    bg: "rgba(239,68,68,0.1)",
+    border: "rgba(239,68,68,0.2)",
+    icon: <UserX size={11} />,
+  },
+  "Closed Won": {
+    color: "#16a34a",
+    bg: "rgba(22,163,74,0.1)",
+    border: "rgba(22,163,74,0.2)",
+    icon: <Trophy size={11} />,
   },
 };
 
@@ -140,6 +155,12 @@ const callConfig: Record<CallStage, { color: string; bg: string; border: string;
     bg: "rgba(100,116,139,0.1)",
     border: "rgba(100,116,139,0.2)",
     icon: <Phone size={11} />,
+  },
+  "Voicemail Left": {
+    color: "#8b5cf6",
+    bg: "rgba(139,92,246,0.1)",
+    border: "rgba(139,92,246,0.2)",
+    icon: <Voicemail size={11} />,
   },
 };
 

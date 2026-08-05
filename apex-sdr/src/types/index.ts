@@ -6,7 +6,9 @@ export type LinkedInStage =
   | "Responded"
   | "Follow Up Msg"
   | "Not Connected"
-  | "Connection Sent";
+  | "Connection Sent"
+  | "Disqualified"
+  | "Closed Won";
 
 export type EmailStage =
   | "Email Sent"
@@ -22,7 +24,8 @@ export type CallStage =
   | "Spoke to gatekeeper"
   | "Responded"
   | "Scheduled"
-  | "Not Called";
+  | "Not Called"
+  | "Voicemail Left";
 
 export interface CallSummary {
   date: string;
