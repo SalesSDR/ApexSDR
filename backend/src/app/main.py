@@ -1,5 +1,7 @@
 import asyncio
+import logging
 import os
+import sys
 
 import structlog
 from arq import create_pool
@@ -60,6 +62,15 @@ async def apply_pending_migrations():
 
 # Configure Structlog
 def setup_logging():
+    # structlog.stdlib.LoggerFactory() (below) routes every structlog call
+    # through Python's stdlib logging module - which, unconfigured, has no
+    # handler on the root logger and defaults to WARNING, so every .info()
+    # call in the app is silently dropped. basicConfig gives it a stdout
+    # handler at INFO; format is the bare message only, since structlog's own
+    # processors (below) already render level/timestamp/logger name into
+    # that message - stdlib's default format would duplicate them.
+    logging.basicConfig(stream=sys.stdout, level=logging.INFO, format="%(message)s")
+
     shared_processors = [
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,

@@ -782,20 +782,33 @@ async def autonomous_pipeline_supervisor_task(ctx):
                 # already monitors (AnalyticsService.failed_jobs()), rather
                 # than a parallel "needs review" concept.
                 transition_prospect(prospect, ProspectState.ERROR_NEEDS_HUMAN)
+                prospect.next_action_at = None
             elif decision.task_to_enqueue == 'start_outbound_sequence':
                 await redis.enqueue_job('start_outbound_sequence', prospect.id, tenant_id=prospect.tenant_id)
+                prospect.next_action_at = None
             elif decision.task_to_enqueue:
                 await redis.enqueue_job(decision.task_to_enqueue, prospect.id)
-            # A decision with no task_to_enqueue (WAIT with nothing due yet,
-            # PAUSE, or END_SEQUENCE for a terminal/retry-exhausted
-            # prospect) is simply not acted on this tick - already logged
-            # above. PAUSE deliberately leaves prospect.status untouched
-            # (unlike HUMAN_REVIEW) - it isn't a failure, just parked.
-
-            # Clear next_action_at so this prospect isn't picked up again next
-            # tick; the object is already attached to this session (it came
-            # from the query above), so no re-query/nested transaction needed.
-            prospect.next_action_at = None
+                prospect.next_action_at = None
+            elif decision.decision_type == DecisionType.WAIT:
+                # RC-1 fix: WAIT never carries a task_to_enqueue (see
+                # Decision's docstring), so this used to fall through to the
+                # unconditional `next_action_at = None` below - permanently
+                # parking the prospect after a single temporary compliance
+                # block (or any other "nothing to do yet" WAIT), since
+                # nothing else ever resets next_action_at for it. Reschedule
+                # instead, the same way every other task in this module
+                # computes its next retry, so the supervisor tries again
+                # later rather than abandoning it.
+                sett_res = await db.execute(select(WorkspaceSetting).where(WorkspaceSetting.tenant_id == prospect.tenant_id))
+                settings_obj = sett_res.scalar_one_or_none()
+                dev_mode = settings_obj.dev_mode if settings_obj else False
+                prospect.next_action_at = get_next_action_time(settings_obj, None, dev_mode, delay_days=1)
+            else:
+                # PAUSE, or END_SEQUENCE for a terminal/retry-exhausted
+                # prospect - deliberately parked, not retried. PAUSE
+                # deliberately leaves prospect.status untouched (unlike
+                # HUMAN_REVIEW) - it isn't a failure, just parked.
+                prospect.next_action_at = None
 
         await db.commit()
 

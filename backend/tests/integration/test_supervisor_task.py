@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.services.compliance.policy as compliance_policy
-from app.models.schemas import DecisionLog, Prospect, ProspectState, SequenceRule, SequenceStep
+from app.models.schemas import DecisionLog, DoNotContactList, Prospect, ProspectState, SequenceRule, SequenceStep
 from app.services.decision.engine import SEQUENCE_STEP_TASK_NAME, DecisionEngine
 from app.workers.tasks import autonomous_pipeline_supervisor_task
 
@@ -135,6 +135,73 @@ async def test_supervisor_logs_a_decision_for_every_due_prospect(db_session):
     logs = (await db_session.execute(select(DecisionLog).where(DecisionLog.tenant_id == "sup-tenant"))).scalars().all()
     logged_prospect_ids = {log.prospect_id for log in logs}
     assert logged_prospect_ids == {p.id for p in prospects}
+
+
+async def test_supervisor_still_clears_next_action_at_after_successful_task_enqueue(db_session):
+    """RC-1 fix regression: successful sequence execution is unchanged -
+    a decision that enqueues a real task still clears next_action_at, same
+    as before this fix (only the no-task-enqueued WAIT path changed)."""
+    await _seed_sequence(db_session, "sup-tenant")
+    prospect = _due_prospect(8, ProspectState.IDLE)
+    db_session.add(prospect)
+    await db_session.flush()
+
+    ctx = _ctx(db_session)
+    await autonomous_pipeline_supervisor_task(ctx)
+
+    await db_session.refresh(prospect)
+    assert ctx["redis"].enqueued == [(SEQUENCE_STEP_TASK_NAME, (prospect.id,), {})]
+    assert prospect.next_action_at is None
+
+
+async def test_supervisor_reschedules_next_action_at_after_a_temporary_compliance_wait(db_session, monkeypatch):
+    """RC-1 fix: a temporary compliance block (BUSINESS_HOURS -> WAIT) must
+    not permanently park the prospect - next_action_at should be rescheduled
+    into the future instead of cleared, so the supervisor tries again."""
+    monkeypatch.setattr(compliance_policy, "is_within_business_hours", lambda *a, **kw: False)
+    await _seed_sequence(db_session, "sup-tenant")
+    prospect = _due_prospect(9, ProspectState.IDLE)
+    db_session.add(prospect)
+    await db_session.flush()
+
+    ctx = _ctx(db_session)
+    before = datetime.now(UTC)
+    await autonomous_pipeline_supervisor_task(ctx)
+
+    await db_session.refresh(prospect)
+    assert ctx["redis"].enqueued == []  # blocked, nothing enqueued - WAIT preserved
+    assert prospect.next_action_at is not None
+    assert prospect.next_action_at > before  # rescheduled, not abandoned
+
+    logs = (await db_session.execute(
+        select(DecisionLog).where(DecisionLog.prospect_id == prospect.id)
+    )).scalars().all()
+    assert any(log.decision_type.value == "WAIT" for log in logs)
+
+
+async def test_supervisor_does_not_reschedule_after_a_permanent_compliance_block(db_session):
+    """RC-1 fix: a PERMANENT compliance block (e.g. do-not-contact) resolves
+    to END_SEQUENCE, not WAIT, and must keep going dormant exactly as
+    before - this fix only changes scheduling for the WAIT/no-task path."""
+    await _seed_sequence(db_session, "sup-tenant")
+    prospect = _due_prospect(10, ProspectState.IDLE, email="blocked@example.com")
+    db_session.add(prospect)
+    db_session.add(DoNotContactList(
+        tenant_id="sup-tenant", type="EMAIL", value="blocked@example.com", source="USER_MANUAL",
+    ))
+    await db_session.flush()
+
+    ctx = _ctx(db_session)
+    await autonomous_pipeline_supervisor_task(ctx)
+
+    await db_session.refresh(prospect)
+    assert ctx["redis"].enqueued == []
+    assert prospect.next_action_at is None  # permanently blocked - not rescheduled
+
+    logs = (await db_session.execute(
+        select(DecisionLog).where(DecisionLog.prospect_id == prospect.id)
+    )).scalars().all()
+    assert any(log.decision_type.value == "END_SEQUENCE" for log in logs)
 
 
 async def test_supervisor_ignores_prospects_not_yet_due(db_session):
