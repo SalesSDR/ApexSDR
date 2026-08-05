@@ -17,6 +17,10 @@ from app.models.schemas import (
     ComplianceLog,
     DecisionLog,
     DecisionType,
+    DoNotContactList,
+    EmailBounceSuppression,
+    EmailVerification,
+    EmailVerificationStatus,
     LinkedInAccount,
     Prospect,
     ProspectState,
@@ -43,6 +47,24 @@ CALL_STATES = (
     ProspectState.VOICEMAIL_LEFT,  # Sequence Engine step 6
 )
 REPLY_OR_BOOKED_STATES = (ProspectState.LINKEDIN_REPLIED, ProspectState.EMAIL_REPLIED, ProspectState.MEETING_BOOKED)
+
+# Dashboard KPI cards (LinkedIn Responses / Meetings Booked / Invalid Data):
+# states only reachable after a prospect has accepted the LinkedIn connection
+# request - i.e. "has responded on LinkedIn at least once". LINKEDIN_REPLIED
+# itself is excluded from this snapshot: webhooks.py's handle_unipile_webhook
+# transitions a LINKEDIN_REPLIED prospect straight on to MEETING_BOOKED or
+# PAUSED_NUDGED within the same request/transaction, so it is never actually
+# persisted as a resting status (see that function's docstring/code).
+LINKEDIN_RESPONDED_STATES = (
+    ProspectState.LI_ACCEPTED_NO_MSG, ProspectState.LI_MSG_SENT, ProspectState.LINKEDIN_NO_RESPONSE,
+)
+# CLOSED_WON's only legal predecessor is MEETING_BOOKED (see
+# core/state_machine.py's ALLOWED_TRANSITIONS), so counting both - not just
+# the current MEETING_BOOKED snapshot - avoids undercounting deals that have
+# since closed. COMPLETED_DECLINED/LOST are deliberately excluded: both are
+# also reachable from several non-meeting paths (PAUSED_NUDGED,
+# BREAKUP_EMAIL_SENT, ...), so folding them in would overcount.
+MEETING_BOOKED_STATES = (ProspectState.MEETING_BOOKED, ProspectState.CLOSED_WON)
 
 # Maps every ProspectState to exactly one funnel bucket, so a pipeline funnel
 # query can GROUP BY status once and fold results into mutually-exclusive
@@ -599,6 +621,166 @@ class AnalyticsService:
                 "total": call_total, "connected": call_connected,
                 "connect_rate_pct": _pct(call_connected, call_total),
             },
+        }
+
+    # --- Dashboard KPI cards: LinkedIn Responses / Meetings Booked / Invalid
+    # Data. All three are computed entirely from existing tables (Prospect,
+    # EmailVerification, EmailBounceSuppression, DoNotContactList) - no new
+    # columns or tables were added for this feature. ---
+
+    async def linkedin_response_metrics(self) -> dict:
+        """"LinkedIn Responses" KPI. Caveat, same as channel_performance()
+        above: a current-status snapshot, not a cumulative event count -
+        there is no per-event history table, and a prospect who responded
+        and has since moved on to MEETING_BOOKED/PAUSED_NUDGED (shared with
+        the email channel) is not counted here, since channel attribution
+        isn't preserved past that point in the current schema."""
+        counts = await self._status_counts()
+        total = sum(counts.get(s.value, 0) for s in LINKEDIN_RESPONDED_STATES)
+
+        since = datetime.now(UTC) - timedelta(days=1)
+        today_query = select(func.count()).where(
+            Prospect.tenant_id == self.tenant_id,
+            Prospect.status.in_(LINKEDIN_RESPONDED_STATES),
+            Prospect.last_status_change_at >= since,
+        )
+        today = (await self.db.execute(today_query)).scalar() or 0
+        return {"linkedin_responses": total, "linkedin_responses_today": today}
+
+    async def meetings_booked_metrics(self) -> dict:
+        """"Meetings Booked" KPI - see MEETING_BOOKED_STATES above for why
+        CLOSED_WON is folded in and COMPLETED_DECLINED/LOST are not."""
+        counts = await self._status_counts()
+        total = sum(counts.get(s.value, 0) for s in MEETING_BOOKED_STATES)
+
+        since = datetime.now(UTC) - timedelta(days=1)
+        today_query = select(func.count()).where(
+            Prospect.tenant_id == self.tenant_id,
+            Prospect.status.in_(MEETING_BOOKED_STATES),
+            Prospect.last_status_change_at >= since,
+        )
+        today = (await self.db.execute(today_query)).scalar() or 0
+        return {"meetings_booked": total, "meetings_booked_today": today}
+
+    async def invalid_data_metrics(self) -> dict:
+        """"Invalid Data" KPI - counts distinct prospects with at least one
+        data-quality issue, aggregated from existing tables only: a prospect
+        counts if its email is flagged INVALID/RISKY in EmailVerification,
+        has ever bounced (EmailBounceSuppression), matches a DoNotContactList
+        entry by email or phone, has no company_name, has no email at all,
+        or shares its email with another prospect in the same tenant
+        (create_prospect()'s own duplicate check is currently disabled - see
+        that route's comment - so duplicates by email can and do occur).
+        `missing_linkedin_url` is always 0: Prospect.linkedin_url is NOT
+        NULL at the DB level, so no existing row can lack one - kept as an
+        explicit bucket for forward compatibility only. Reasons overlap, so
+        `invalid_data` is a DISTINCT prospect count, not a sum of `by_reason`."""
+        dup_emails = (
+            select(Prospect.email)
+            .where(Prospect.tenant_id == self.tenant_id, Prospect.email.isnot(None))
+            .group_by(Prospect.email)
+            .having(func.count() > 1)
+        ).subquery()
+
+        invalid_email_query = (
+            select(func.count(func.distinct(Prospect.id)))
+            .select_from(Prospect)
+            .join(EmailVerification, EmailVerification.email == Prospect.email)
+            .where(
+                Prospect.tenant_id == self.tenant_id,
+                EmailVerification.status.in_([EmailVerificationStatus.INVALID, EmailVerificationStatus.RISKY]),
+            )
+        )
+        bounced_query = (
+            select(func.count(func.distinct(Prospect.id)))
+            .select_from(Prospect)
+            .join(EmailBounceSuppression, EmailBounceSuppression.email == Prospect.email)
+            .where(Prospect.tenant_id == self.tenant_id)
+        )
+        blacklisted_query = (
+            select(func.count(func.distinct(Prospect.id)))
+            .select_from(Prospect)
+            .join(
+                DoNotContactList,
+                (DoNotContactList.tenant_id == self.tenant_id)
+                & (
+                    ((DoNotContactList.type == "EMAIL") & (DoNotContactList.value == Prospect.email))
+                    | ((DoNotContactList.type == "PHONE") & (DoNotContactList.value == Prospect.phone_number))
+                ),
+            )
+            .where(Prospect.tenant_id == self.tenant_id)
+        )
+        missing_company_query = select(func.count()).where(
+            Prospect.tenant_id == self.tenant_id, Prospect.company_name.is_(None)
+        )
+        missing_email_query = select(func.count()).where(
+            Prospect.tenant_id == self.tenant_id, Prospect.email.is_(None)
+        )
+        duplicate_query = select(func.count()).where(
+            Prospect.tenant_id == self.tenant_id, Prospect.email.in_(select(dup_emails.c.email)),
+        )
+
+        invalid_email = (await self.db.execute(invalid_email_query)).scalar() or 0
+        bounced = (await self.db.execute(bounced_query)).scalar() or 0
+        blacklisted = (await self.db.execute(blacklisted_query)).scalar() or 0
+        missing_company = (await self.db.execute(missing_company_query)).scalar() or 0
+        missing_email = (await self.db.execute(missing_email_query)).scalar() or 0
+        duplicate = (await self.db.execute(duplicate_query)).scalar() or 0
+
+        total_query = (
+            select(func.count(func.distinct(Prospect.id)))
+            .select_from(Prospect)
+            .outerjoin(EmailVerification, EmailVerification.email == Prospect.email)
+            .outerjoin(EmailBounceSuppression, EmailBounceSuppression.email == Prospect.email)
+            .outerjoin(
+                DoNotContactList,
+                (DoNotContactList.tenant_id == self.tenant_id)
+                & (
+                    ((DoNotContactList.type == "EMAIL") & (DoNotContactList.value == Prospect.email))
+                    | ((DoNotContactList.type == "PHONE") & (DoNotContactList.value == Prospect.phone_number))
+                ),
+            )
+            .where(
+                Prospect.tenant_id == self.tenant_id,
+                (
+                    EmailVerification.status.in_([EmailVerificationStatus.INVALID, EmailVerificationStatus.RISKY])
+                    | EmailBounceSuppression.id.isnot(None)
+                    | DoNotContactList.id.isnot(None)
+                    | Prospect.company_name.is_(None)
+                    | Prospect.email.is_(None)
+                    | Prospect.email.in_(select(dup_emails.c.email))
+                ),
+            )
+        )
+        total = (await self.db.execute(total_query)).scalar() or 0
+
+        return {
+            "invalid_data": total,
+            "by_reason": {
+                "invalid_or_risky_email": invalid_email,
+                "bounced_email": bounced,
+                "blacklisted_contact": blacklisted,
+                "missing_company": missing_company,
+                "missing_email": missing_email,
+                "duplicate_lead": duplicate,
+                "missing_linkedin_url": 0,
+            },
+        }
+
+    async def dashboard_kpi_metrics(self) -> dict:
+        """Bundles the three new dashboard KPI cards (LinkedIn Responses,
+        Meetings Booked, Invalid Data) into a single response so the
+        frontend can fetch them in one request instead of three."""
+        linkedin = await self.linkedin_response_metrics()
+        meetings = await self.meetings_booked_metrics()
+        invalid = await self.invalid_data_metrics()
+        return {
+            "linkedinResponses": linkedin["linkedin_responses"],
+            "linkedinResponsesToday": linkedin["linkedin_responses_today"],
+            "meetingsBooked": meetings["meetings_booked"],
+            "meetingsBookedToday": meetings["meetings_booked_today"],
+            "invalidData": invalid["invalid_data"],
+            "invalidDataByReason": invalid["by_reason"],
         }
 
     async def revenue_metrics(self) -> dict:

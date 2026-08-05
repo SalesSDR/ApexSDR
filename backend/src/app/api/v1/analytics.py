@@ -237,3 +237,12 @@ async def get_revenue_metrics(tenant_id: str = Depends(verify_tenant), db: Async
     and lost_value."""
     metrics = await AnalyticsService(db, tenant_id).revenue_metrics()
     return {"status": "success", "data": metrics}
+
+
+@router.get("/metrics/dashboard-kpis")
+async def get_dashboard_kpi_metrics(tenant_id: str = Depends(verify_tenant), db: AsyncSession = Depends(get_db)):
+    """Dashboard KPI cards: LinkedIn Responses, Meetings Booked, Invalid
+    Data. Bundled into one endpoint (rather than three) so the dashboard
+    can fetch them in a single request."""
+    metrics = await AnalyticsService(db, tenant_id).dashboard_kpi_metrics()
+    return {"status": "success", "data": metrics}

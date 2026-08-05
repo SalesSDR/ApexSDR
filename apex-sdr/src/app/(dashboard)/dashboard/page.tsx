@@ -10,6 +10,9 @@ import {
   MessageSquare,
   DollarSign,
   Flame,
+  Reply,
+  CalendarCheck,
+  ShieldAlert,
 } from "lucide-react";
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -39,6 +42,42 @@ export default function DashboardPage() {
 
   const qualificationEntries = Object.entries(data?.qualificationDistribution ?? {});
   const qualificationTotal = qualificationEntries.reduce((sum, [, count]) => sum + count, 0);
+
+  // Live KPI cards: LinkedIn Responses, Meetings Booked, Invalid Data.
+  // Same card shell/typography as the block above, added as its own row
+  // rather than folded into the existing 4-card grid, so the current
+  // layout is left completely undisturbed.
+  const kpiCards = [
+    {
+      label: "LinkedIn Responses",
+      value: data?.linkedinResponses ?? 0,
+      subtitle: `+${data?.linkedinResponsesToday ?? 0} today`,
+      subtitleColor: "var(--apex-success)",
+      icon: <Reply size={18} />,
+      color: "#0a66c2",
+    },
+    {
+      label: "Meetings Booked",
+      value: data?.meetingsBookedTotal ?? 0,
+      subtitle: `${data?.meetingsBookedToday ?? 0} scheduled today`,
+      subtitleColor: "var(--apex-muted)",
+      icon: <CalendarCheck size={18} />,
+      color: "#22c55e",
+    },
+    {
+      label: "Invalid Data",
+      value: data?.invalidData ?? 0,
+      subtitle: "Needs Review",
+      subtitleColor: "#ef4444",
+      icon: <ShieldAlert size={18} />,
+      color: "#ef4444",
+      // No dedicated "invalid records" view exists yet to link to - the
+      // card is styled as clickable in anticipation of that (per spec:
+      // "clicking this card should eventually allow navigation to invalid
+      // records"), but doesn't navigate anywhere yet.
+      clickable: true,
+    },
+  ];
 
   return (
     <div className="flex flex-col h-full">
@@ -83,6 +122,38 @@ export default function DashboardPage() {
                 {loading ? "—" : m.value.toLocaleString()}
               </p>
               <p className="text-xs" style={{ color: "var(--apex-muted)" }}>{m.label}</p>
+            </motion.div>
+          ))}
+        </div>
+
+        {/* Live KPI cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+          {kpiCards.map((m, i) => (
+            <motion.div
+              key={m.label}
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: (metrics.length + i) * 0.08 }}
+              className="rounded-xl p-4"
+              style={{
+                background: "var(--apex-surface)",
+                border: "1px solid var(--apex-border)",
+                cursor: m.clickable ? "pointer" : undefined,
+              }}
+              whileHover={m.clickable ? { y: -2, borderColor: m.color } : undefined}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="p-2 rounded-lg" style={{ background: `${m.color}18`, color: m.color }}>
+                  {m.icon}
+                </div>
+              </div>
+              <p className="text-2xl font-bold mb-0.5" style={{ color: "var(--apex-text)" }}>
+                {loading ? "—" : m.value.toLocaleString()}
+              </p>
+              <p className="text-xs mb-1" style={{ color: "var(--apex-muted)" }}>{m.label}</p>
+              <p className="text-xs font-medium" style={{ color: m.subtitleColor }}>
+                {loading ? " " : m.subtitle}
+              </p>
             </motion.div>
           ))}
         </div>
