@@ -107,4 +107,33 @@ describe("fetchApi (authenticated API client)", () => {
 
     await expect(fetchApi("/prospects")).rejects.toThrow("Missing authentication credentials.");
   });
+
+  it("extracts readable messages from FastAPI's array-shaped 422 validation detail", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: async () => ({
+        detail: [
+          { loc: ["body", "email"], msg: "value is not a valid email address", type: "value_error" },
+          { loc: ["body", "phone_number"], msg: "string does not match regex", type: "value_error" },
+        ],
+      }),
+    });
+    const { fetchApi } = await import("./api");
+
+    await expect(fetchApi("/prospects")).rejects.toThrow(
+      "value is not a valid email address, string does not match regex"
+    );
+  });
+
+  it("falls back to a generic API error when detail is an array with no msg fields", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: async () => ({ detail: [{ loc: ["body"], type: "value_error" }] }),
+    });
+    const { fetchApi } = await import("./api");
+
+    await expect(fetchApi("/prospects")).rejects.toThrow("API error: 422");
+  });
 });

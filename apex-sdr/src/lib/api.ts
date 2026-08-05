@@ -55,7 +55,18 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.detail || `API error: ${response.status}`);
+    const detail = errorData.detail;
+    // FastAPI's own 422 validation responses shape `detail` as an array of
+    // {loc, msg, type} objects rather than a string (unlike handler-raised
+    // HTTPException(detail="...")). Left as-is, `new Error(anArray)` coerces
+    // via Array.prototype.toString(), which stringifies each object to
+    // "[object Object]" instead of a readable message.
+    const message = typeof detail === "string"
+      ? detail
+      : Array.isArray(detail)
+        ? detail.map((d: { msg?: string }) => d?.msg).filter(Boolean).join(", ")
+        : "";
+    throw new Error(message || `API error: ${response.status}`);
   }
 
   return response.json();
