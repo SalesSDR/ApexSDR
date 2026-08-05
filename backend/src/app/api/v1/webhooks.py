@@ -412,30 +412,23 @@ async def handle_email_delivery_event(request: Request, db: AsyncSession = Depen
     logger.warning(f"Suppressed {recipient} for future sends: {event_type}")
     return {"status": "received"}
 
-@router.post("/webhooks/twilio/call-status", status_code=status.HTTP_200_OK)
-async def handle_twilio_webhook(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    arq_pool: ArqRedis = Depends(get_arq_pool),
-    CallStatus: str = Form(...),
-    To: str = Form(...),
-    CallSid: str = Form(None),
-):
-    """
-    Handles Twilio Voice call status updates.
-    """
-    await verify_twilio_signature(request)
-    logger.info(f"Twilio Call Status Webhook: {To} -> {CallStatus}")
-
+async def apply_twilio_call_status(
+    db: AsyncSession, arq_pool: ArqRedis, to_number: str, call_status: str, call_sid: str | None,
+) -> dict:
+    """Core Twilio call-status state transition - factored out of
+    handle_twilio_webhook so MockTwilioAdapter's simulated callback (mock
+    mode has no real Twilio infrastructure to ever deliver this webhook)
+    can invoke the exact same logic instead of duplicating it. Behavior is
+    unchanged from before this was extracted."""
     # Clean the 'To' number to match our DB
-    cleaned_number = To.replace("+", "").strip()
-    
+    cleaned_number = to_number.replace("+", "").strip()
+
     async with db.begin():
         # Find prospect by phone number, locking row
         query = select(Prospect).where(Prospect.phone_number.ilike(f"%{cleaned_number}%")).with_for_update()
         res = await db.execute(query)
         prospect = res.scalar_one_or_none()
-        
+
         if not prospect:
             return {"status": "ignored", "reason": "Prospect not found"}
 
@@ -456,13 +449,13 @@ async def handle_twilio_webhook(
         dev_mode = settings_obj.dev_mode if settings_obj else False
 
         try:
-            if CallStatus == "answered":
+            if call_status == "answered":
                 # The call was picked up; the eventual "completed" event
                 # resolves the actual outcome once the call ends.
                 transition_prospect(prospect, ProspectState.CALL_CONNECTED)
                 logger.info(f"Prospect {prospect.id} Call answered -> CALL_CONNECTED")
 
-            elif CallStatus == "completed":
+            elif call_status == "completed":
                 # Sprint 7: the actual outcome (MEETING_BOOKED,
                 # COMPLETED_DECLINED, ERROR_NEEDS_HUMAN, ...) is decided
                 # turn-by-turn by the live conversation itself - see
@@ -470,8 +463,8 @@ async def handle_twilio_webhook(
                 # only place Voice AI's Decision Engine output changes
                 # Prospect state. This webhook only knows the call ended;
                 # it never assumes what happened during it.
-                if CallSid:
-                    await enqueue_task(arq_pool, 'summarize_voice_conversation_task', CallSid)
+                if call_sid:
+                    await enqueue_task(arq_pool, 'summarize_voice_conversation_task', call_sid)
 
                 if prospect.status == ProspectState.CALL_CONNECTED:
                     # The call ended without the conversation reaching any
@@ -484,7 +477,7 @@ async def handle_twilio_webhook(
                     await sync_crm_after_reply(prospect, db=db)
                 logger.info(f"Prospect {prospect.id} Call Completed. Final status: {prospect.status.value}")
 
-            elif CallStatus in ["busy", "no-answer", "failed", "canceled", "voicemail"]:
+            elif call_status in ["busy", "no-answer", "failed", "canceled", "voicemail"]:
                 if getattr(prospect, "call_attempts", 0) == 0:
                     prospect.call_attempts = 1
                     transition_prospect(prospect, ProspectState.CALL_NO_ANSWER_1)
@@ -493,7 +486,7 @@ async def handle_twilio_webhook(
                         prospect.next_action_at = now_utc + timedelta(seconds=60)
                     else:
                         prospect.next_action_at = get_next_business_time(now_utc + timedelta(days=1), getattr(settings_obj, 'timezone', 'America/New_York'))
-                    logger.info(f"Prospect {prospect.id} Call {CallStatus}. call_attempts=1, State -> CALL_NO_ANSWER_1")
+                    logger.info(f"Prospect {prospect.id} Call {call_status}. call_attempts=1, State -> CALL_NO_ANSWER_1")
                 elif prospect.call_attempts == 1:
                     prospect.call_attempts = 2
                     transition_prospect(prospect, ProspectState.CALL_NO_ANSWER_2)
@@ -502,14 +495,31 @@ async def handle_twilio_webhook(
                         prospect.next_action_at = now_utc + timedelta(seconds=60)
                     else:
                         prospect.next_action_at = get_next_business_time(now_utc + timedelta(days=1), getattr(settings_obj, 'timezone', 'America/New_York'))
-                    logger.info(f"Prospect {prospect.id} Call {CallStatus}. call_attempts=2, State -> CALL_NO_ANSWER_2")
+                    logger.info(f"Prospect {prospect.id} Call {call_status}. call_attempts=2, State -> CALL_NO_ANSWER_2")
                 else:
                     transition_prospect(prospect, ProspectState.UNRESPONSIVE_DEAD)
                     prospect.next_action_at = None
                     await sync_crm_after_reply(prospect, db=db)
-                    logger.info(f"Prospect {prospect.id} Call {CallStatus}. Exhausted retries -> UNRESPONSIVE_DEAD")
+                    logger.info(f"Prospect {prospect.id} Call {call_status}. Exhausted retries -> UNRESPONSIVE_DEAD")
         except IllegalStateTransitionError as e:
             logger.warning(f"Ignoring Twilio call status for prospect {prospect.id}: {e}")
             return {"status": "ignored", "reason": "illegal_transition"}
 
     return {"status": "received"}
+
+
+@router.post("/webhooks/twilio/call-status", status_code=status.HTTP_200_OK)
+async def handle_twilio_webhook(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    arq_pool: ArqRedis = Depends(get_arq_pool),
+    CallStatus: str = Form(...),
+    To: str = Form(...),
+    CallSid: str = Form(None),
+):
+    """
+    Handles Twilio Voice call status updates.
+    """
+    await verify_twilio_signature(request)
+    logger.info(f"Twilio Call Status Webhook: {To} -> {CallStatus}")
+    return await apply_twilio_call_status(db, arq_pool, To, CallStatus, CallSid)
